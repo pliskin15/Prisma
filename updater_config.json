@@ -1,0 +1,7 @@
+
+{
+  "manifest_url": "https://raw.githubusercontent.com/pliskin15/prisma/updates/updates/latest/version.json",
+  "app_executable": "Prisma.exe",
+  "exclude": ["launcher.exe", "updater_config.json", "version.txt"],
+  "auth_token": ""
+}
