@@ -5,7 +5,7 @@ from datetime import datetime
 
 # build_manifest.py — trechos importantes para você revisar
 BUILD_DIR   = Path("dist/Prisma")        # pasta gerada pelo PyInstaller do app
-NEW_VERSION = "1.0.0"                    # defina a versão que está lançando
+NEW_VERSION = "1.0.2"                    # defina a versão que está lançando
 GITHUB_USER = "pliskin15"                 # seu usuário GitHub
 GITHUB_REPO = "Prisma"                   # nome do repositório
 GIT_BRANCH  = "updates"                  # branch onde vamos publicar

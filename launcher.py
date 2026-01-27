@@ -5,7 +5,7 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 import tkinter as tk
 from tkinter import ttk, messagebox
-
+from urllib.parse import quote
 # ---------- Utilidades ----------
 def app_dir() -> Path:
     # Diretório de instalação (pasta onde está o launcher.exe)
@@ -127,6 +127,7 @@ class UpdaterUI(tk.Tk):
             return json.loads(resp.read().decode("utf-8"))
 
     def _http_stream_to_file(self, url, out_path: Path, expected_size: int = 0):
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = out_path.with_suffix(out_path.suffix + ".tmpdl")
         req = Request(url, headers={"User-Agent": "Updater"})
         if AUTH_TOKEN:
@@ -202,7 +203,7 @@ class UpdaterUI(tk.Tk):
 
         downloaded_bytes = 0
         for rel, meta in to_update:
-            url = f"{base_url}/{rel}"
+            url = f"{base_url}/{quote(rel.replace('\\', '/'))}"
             dst = root / rel
             size = int(meta.get("size", 0))
             self._log(f"Baixando: {rel} ({size} bytes)")
