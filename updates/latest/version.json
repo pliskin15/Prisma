@@ -1,14 +1,14 @@
 {
-  "version": "1.0.2",
-  "generated_at": "2026-01-27T20:10:27.841758Z",
+  "version": "1.0.3",
+  "generated_at": "2026-01-28T11:39:15.935791Z",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/files",
   "files": {
     "Prisma.exe": {
-      "sha256": "25944c5d941a64ccbc2746f4b8d2b9dd84be77c183f464f9dbdb58e6f720f49e",
-      "size": 23476207
+      "sha256": "14c6bffb480f882380811a2cf74094e329da657d3befcce8292d0ce07e5e33d5",
+      "size": 23548892
     },
     "_internal/base_library.zip": {
-      "sha256": "66d9715a8c8940f77c643ba3ab7f25befce0c70cdde64bb98d82bb55cdef7b88",
+      "sha256": "06613f224bb6ad22f249250307a68c7ad6789f1b3b4bc7684f618c88111ed3fc",
       "size": 1403000
     },
     "_internal/libcrypto-3.dll": {
@@ -1239,181 +1239,189 @@
       "sha256": "3a9afcedfd6d63cca9fc6ec6398f28b8596547feef7df37fa24ecd75ff7c8e81",
       "size": 344
     },
+    "_internal/pandas/io/formats/templates/typst.tpl": {
+      "sha256": "92fb843c53b1bccd72da2e5877d3ffe4e43c9a06bd9ce6c0b429856aa663bb41",
+      "size": 366
+    },
     "_internal/pandas/_libs/algos.cp313-win_amd64.pyd": {
-      "sha256": "2b938490f39399cbd4a86b7da0a560183f9363035bdcb4911f23f316b8c72ffa",
-      "size": 1701888
+      "sha256": "6e22f33f40697a45fcc8131539c4d80135ca8fda6f1e0a596b57d74ed2a11602",
+      "size": 1427456
     },
     "_internal/pandas/_libs/arrays.cp313-win_amd64.pyd": {
-      "sha256": "3d0decb7a0b42ec57d57c3b4a771e1f75f77cae189ec1aa7cd30b91f4a1869e9",
-      "size": 92160
+      "sha256": "001e8b786bbc01924485e43ecef27daa088329bd16469fa0db48318bb1a42e93",
+      "size": 80896
     },
     "_internal/pandas/_libs/byteswap.cp313-win_amd64.pyd": {
-      "sha256": "2b7acfa769048eb339fc2b90d13247e9511cd9cb2c733974526ac1622f188008",
-      "size": 42496
+      "sha256": "996ad6dedcfe87e6a1e867340f5416547529d660fa6ec80062fce3818ae61955",
+      "size": 38912
     },
     "_internal/pandas/_libs/groupby.cp313-win_amd64.pyd": {
-      "sha256": "f4d899dbe116ffe6de45775ecb62e2958fdade19ba59d21063e76509b289ab9b",
-      "size": 2019840
+      "sha256": "8ada56b0da4e74182da164c9df58dbec7442e4a392c3279a8156d74d345c5f85",
+      "size": 1722368
     },
     "_internal/pandas/_libs/hashing.cp313-win_amd64.pyd": {
-      "sha256": "06166fcf4f0bc8cd82a8e1f99a0cc7c547034920c9fa834e938ad8305e299a3c",
-      "size": 155648
+      "sha256": "eeacf506f2550fa3b8b22c6847b8547e6e339c8e0e6c89defc0b1a3c1dfea998",
+      "size": 67584
     },
     "_internal/pandas/_libs/hashtable.cp313-win_amd64.pyd": {
-      "sha256": "18a19e4e606db6c491398f88861a0e7fba22a0e66885e6b1a087b03bb7e36d48",
-      "size": 1758720
+      "sha256": "b9a4f947cef09c2029e869c78cbabfd900c83d891c410379cf9d7cf9b65f1de0",
+      "size": 1561088
     },
     "_internal/pandas/_libs/index.cp313-win_amd64.pyd": {
-      "sha256": "3e89e7f057cc34b5597b9bf85fed32077529ee0aa184afc334c4b99484bcb4ea",
-      "size": 677888
+      "sha256": "9a8d32ce9ff83ba6c5ad2bac4c2504a0832f500bc33d122232750ad653ed3bc0",
+      "size": 522240
     },
     "_internal/pandas/_libs/indexing.cp313-win_amd64.pyd": {
-      "sha256": "e943554317a0f657735b299f15beec666ddd1b5dbcb58538eaaf34d0650ca42a",
-      "size": 50688
-    },
-    "_internal/pandas/_libs/internals.cp313-win_amd64.pyd": {
-      "sha256": "8173a2384e4d63cc4e614009fcf6e2662502d8db199e4381884889b766b2adc0",
-      "size": 301056
-    },
-    "_internal/pandas/_libs/interval.cp313-win_amd64.pyd": {
-      "sha256": "e907d68f816077019eaee34c2b1e20735ed20456ecfa4d56e16de10b0c202cc6",
-      "size": 1028096
-    },
-    "_internal/pandas/_libs/join.cp313-win_amd64.pyd": {
-      "sha256": "9088e2ddb5d134f3750bd7cd782d11e18963c7edb0f993891b57ceacb466fa43",
-      "size": 1026560
-    },
-    "_internal/pandas/_libs/json.cp313-win_amd64.pyd": {
-      "sha256": "f3e25d931cfd15ca6f0924a93156418ffe3a691ea3bcaf8fe0aa4b6c503d0407",
-      "size": 51200
-    },
-    "_internal/pandas/_libs/lib.cp313-win_amd64.pyd": {
-      "sha256": "db3cf3084f39bea725a6204b977080b8a22f75b1256641587baea90ad1c4e143",
-      "size": 627712
-    },
-    "_internal/pandas/_libs/missing.cp313-win_amd64.pyd": {
-      "sha256": "a93726fb90b1ea4b9dc7446933607d071d35379acffb84e040c8dc422958be3d",
-      "size": 156160
-    },
-    "_internal/pandas/_libs/ops.cp313-win_amd64.pyd": {
-      "sha256": "92704167558731e192775d9d1b4d380a6b3d087a6a0cc9d1fc616d1e1ccbec59",
-      "size": 191488
-    },
-    "_internal/pandas/_libs/ops_dispatch.cp313-win_amd64.pyd": {
-      "sha256": "55fe69af02a898cd9a663a4f93bf841929e1a7ec76b5631b88c479d40ed79072",
-      "size": 45568
-    },
-    "_internal/pandas/_libs/pandas_datetime.cp313-win_amd64.pyd": {
-      "sha256": "f50191b5f81315c172e396d375043860d9219f87e6326b041e9bb5cc70086412",
-      "size": 32256
-    },
-    "_internal/pandas/_libs/pandas_parser.cp313-win_amd64.pyd": {
-      "sha256": "1a9fc28d48854b11b853ef9f76c9d89be0cc3cf383b8e7f053c15a3f87b5b6a7",
-      "size": 29696
-    },
-    "_internal/pandas/_libs/parsers.cp313-win_amd64.pyd": {
-      "sha256": "e39933a3a63344e34d9b5d86062d82637951f69f763a894e42efef70dfba5856",
-      "size": 358912
-    },
-    "_internal/pandas/_libs/properties.cp313-win_amd64.pyd": {
-      "sha256": "f46cb573d7f8d1e51c236f8419d2da047bf49148cbb23010424ff33496c3cca5",
-      "size": 63488
-    },
-    "_internal/pandas/_libs/reshape.cp313-win_amd64.pyd": {
-      "sha256": "da42fec0609d9e965c78bb80df12e665518625012168d988f027f47c2feeb8b2",
-      "size": 228352
-    },
-    "_internal/pandas/_libs/sas.cp313-win_amd64.pyd": {
-      "sha256": "50c5ae5f1fdf9dfd341f04596610aa848c75c4dcb5c74e9a214c6ea40c85e4cf",
-      "size": 187392
-    },
-    "_internal/pandas/_libs/sparse.cp313-win_amd64.pyd": {
-      "sha256": "0138df9551e6f1c31e18081d94edcf6d93b52b889f3fe1a9d245e2b932a0764c",
-      "size": 751104
-    },
-    "_internal/pandas/_libs/testing.cp313-win_amd64.pyd": {
-      "sha256": "27cb41786884a2e336c120cbd2e44eef36cad05540d4f927a88af2a9858c567a",
-      "size": 80384
-    },
-    "_internal/pandas/_libs/tslib.cp313-win_amd64.pyd": {
-      "sha256": "42cbbe38d2892207b26b14a38aafda1515aedf6d8acb414cb0e70799b549d885",
-      "size": 240128
-    },
-    "_internal/pandas/_libs/writers.cp313-win_amd64.pyd": {
-      "sha256": "a2ad5c875ce8a05143df87ae2ca8d34123016f3b8eda70777c85b52eb2f22aec",
-      "size": 184832
-    },
-    "_internal/pandas/_libs/tslibs/base.cp313-win_amd64.pyd": {
-      "sha256": "7ea25f6c7a597503b3cbbc2f0085fd2e391f9a4dc10bb5102cd58dead70260b9",
+      "sha256": "832cb1e133360adabc6c0cfd811f06c289db119a70b840e87d81e394ab907948",
       "size": 46080
     },
+    "_internal/pandas/_libs/internals.cp313-win_amd64.pyd": {
+      "sha256": "81fb01a42203c9ccc84d9c26642c2c4eb3598b8b4a3a6b384be90cdcf56f2383",
+      "size": 205312
+    },
+    "_internal/pandas/_libs/interval.cp313-win_amd64.pyd": {
+      "sha256": "9f158b6c77b551dd46db97c4a4b36e179215f4b3c0d8e433a898d8396baf185d",
+      "size": 766464
+    },
+    "_internal/pandas/_libs/join.cp313-win_amd64.pyd": {
+      "sha256": "89a799200efe7087a498bc5df81814ba713995eed2a0da4d6f638fe21c96b31f",
+      "size": 754688
+    },
+    "_internal/pandas/_libs/json.cp313-win_amd64.pyd": {
+      "sha256": "a0ba78b1f9a080fb565f58bfb6a49f5ca75645759a5d3aa31f788f64a2e6641f",
+      "size": 52224
+    },
+    "_internal/pandas/_libs/lib.cp313-win_amd64.pyd": {
+      "sha256": "1aa5928a0600670418f8ba0a17d2269e95e9ccfa441ae7a1234a0f1e9565d606",
+      "size": 436736
+    },
+    "_internal/pandas/_libs/missing.cp313-win_amd64.pyd": {
+      "sha256": "ec2378a82a088eaed75aaeae8db00da55f51cba65ed377e17a5516ab0b2574a7",
+      "size": 138240
+    },
+    "_internal/pandas/_libs/ops.cp313-win_amd64.pyd": {
+      "sha256": "5685cf90d8cd3b5c051e4b857178bd1af64705412db305d74e0b8584a610c699",
+      "size": 96256
+    },
+    "_internal/pandas/_libs/ops_dispatch.cp313-win_amd64.pyd": {
+      "sha256": "02ed0cd35974f74b2d60e6baae8f3954d62cac81854d83ddde9aea6beb67f245",
+      "size": 41984
+    },
+    "_internal/pandas/_libs/pandas_datetime.cp313-win_amd64.pyd": {
+      "sha256": "8cd58f5ef2d753354c92e1a12cf3d2ecc07d218bc2d84a200d6c326b9517d578",
+      "size": 35840
+    },
+    "_internal/pandas/_libs/pandas_parser.cp313-win_amd64.pyd": {
+      "sha256": "2c8e153e05343e54d30a999a3b279ca1313f52c19304f9cb7aa8d9c220e7c138",
+      "size": 30720
+    },
+    "_internal/pandas/_libs/parsers.cp313-win_amd64.pyd": {
+      "sha256": "c523cb406b6cfcc635c9250b0e995a213ce0522ab644b7a1c37aea8108cc78f2",
+      "size": 267264
+    },
+    "_internal/pandas/_libs/properties.cp313-win_amd64.pyd": {
+      "sha256": "070c32cea2ab1ea101af8268af78f637f55307db405d667ce1cd56c10d6525d9",
+      "size": 55808
+    },
+    "_internal/pandas/_libs/reshape.cp313-win_amd64.pyd": {
+      "sha256": "80c8621a5ae222cae26ea26fa83cbee1640e5eb76e45b0cfc5f99b1e4d410f15",
+      "size": 131584
+    },
+    "_internal/pandas/_libs/sas.cp313-win_amd64.pyd": {
+      "sha256": "3d6eaab6298fd58a515f59aff5e7abe66fd9f62bbca29012fb9e87a18b4071d3",
+      "size": 89088
+    },
+    "_internal/pandas/_libs/sparse.cp313-win_amd64.pyd": {
+      "sha256": "04146931dc49dc33e6e57545bab3f4ec80ce1efcfb09de8e1c0698efc66c0fb2",
+      "size": 603648
+    },
+    "_internal/pandas/_libs/testing.cp313-win_amd64.pyd": {
+      "sha256": "5408bb3700304b397bdbc7c4cd352d2ddbe70e88a846b0db6e4d58042c339ef2",
+      "size": 71168
+    },
+    "_internal/pandas/_libs/tslib.cp313-win_amd64.pyd": {
+      "sha256": "dbe7854783844ef6a5318d6dae3dde5f5241d618ef4d1723bb5e248092c57f1c",
+      "size": 107520
+    },
+    "_internal/pandas/_libs/writers.cp313-win_amd64.pyd": {
+      "sha256": "c47b9e5fc0ec6614a3cab5b8b5e0ff9c8ff8605fdc6503ee24dffc4ceb97e819",
+      "size": 88064
+    },
+    "_internal/pandas/_libs/_cyutility.cp313-win_amd64.pyd": {
+      "sha256": "b6eb9ff7745def1fd26e397cb09e19237e5bef378d6c25b38e10d0fb314ed8d1",
+      "size": 127488
+    },
+    "_internal/pandas/_libs/tslibs/base.cp313-win_amd64.pyd": {
+      "sha256": "4f93ac60f58069a9ecde274b524d0f5dba247754c322d0800a840fa1e5a52a51",
+      "size": 41472
+    },
     "_internal/pandas/_libs/tslibs/ccalendar.cp313-win_amd64.pyd": {
-      "sha256": "30d9c514ee2e360caada6643d01d756cd84322592c5e4146d11ca9856eb1b965",
-      "size": 60416
+      "sha256": "3b358361aa5a5ef7dca2006c6fd42d709312b2ec06600cf0f53726acdb9ce434",
+      "size": 57344
     },
     "_internal/pandas/_libs/tslibs/conversion.cp313-win_amd64.pyd": {
-      "sha256": "44c2124abd8e1a1d074cbae7d9b975cb79669bba1d5a687961e914cdfd283207",
-      "size": 215040
+      "sha256": "89f04d809c00203384149d0a1420b057e414af75891aa03e6fdf8290bfd25658",
+      "size": 126976
     },
     "_internal/pandas/_libs/tslibs/dtypes.cp313-win_amd64.pyd": {
-      "sha256": "37ed06e554947f72ffba66b604888319f1992241f41acdcb121b5bd11ae5c4e5",
-      "size": 144896
+      "sha256": "a48abe6921faa468384f6958e10df0e8550b1486241e685ca28cc6a285c7cc7b",
+      "size": 113664
     },
     "_internal/pandas/_libs/tslibs/fields.cp313-win_amd64.pyd": {
-      "sha256": "43886cb23f136c2cb8f36535497afbd350ecdfaebe0de83bd535c945188c7ddc",
-      "size": 257536
+      "sha256": "a94eee31fb971de0df8c93fba215d2df9f1cd87caf8a139a96c47d29ff81387b",
+      "size": 151040
     },
     "_internal/pandas/_libs/tslibs/nattype.cp313-win_amd64.pyd": {
-      "sha256": "95cb11bc714ae061d2f06a20ca4ac7f8b79b5959b43ac13084938c9cc6d36f75",
-      "size": 188416
+      "sha256": "434c6d7071e7ea717028329b5fdef2c529764d1a9036af01488d5fba229afbec",
+      "size": 150528
     },
     "_internal/pandas/_libs/tslibs/np_datetime.cp313-win_amd64.pyd": {
-      "sha256": "ebe9ffc45c0d0eec56545e292657ed2dd0ee40a86a5bd97745324ef5d2a6c211",
-      "size": 106496
+      "sha256": "13966a9a85fd38ee630e462889d3ec614154db373522c94041110cc336be7149",
+      "size": 94720
     },
     "_internal/pandas/_libs/tslibs/offsets.cp313-win_amd64.pyd": {
-      "sha256": "ab49902d23275cc08d506dd21bdafaa8e90251723008c774481345b9567d0afa",
-      "size": 779264
+      "sha256": "54936f76ee243fa189530d7b763e407742cae4ecae1475643cd618f72d382530",
+      "size": 753152
     },
     "_internal/pandas/_libs/tslibs/parsing.cp313-win_amd64.pyd": {
-      "sha256": "44203decdfcdcaf77f0ca4d15709893c6b75e1acb83ebee75d035be0e2d60f63",
-      "size": 297984
+      "sha256": "60f6e3448f6ef9dae776f98008b5bcd372daa7b768aff9ffb29858a23031c854",
+      "size": 159232
     },
     "_internal/pandas/_libs/tslibs/period.cp313-win_amd64.pyd": {
-      "sha256": "a984f6b19c6c1f906e0ffc1584525726008c0034ba738d4796b34501a03ec355",
-      "size": 378880
+      "sha256": "4c92a6119af4e44dbbe193ba0148495597dff31a8a1df38daf514e43b6262001",
+      "size": 272896
     },
     "_internal/pandas/_libs/tslibs/strptime.cp313-win_amd64.pyd": {
-      "sha256": "552c83a095f2f1e4c44f595a8de697e6ca1df5cb6530a6c28643fd4b5e5d07c7",
-      "size": 277504
+      "sha256": "c32bfd42ae1a740e061a83b041794137a705d884e24f7164d3772c3ff7d43ab5",
+      "size": 160256
     },
     "_internal/pandas/_libs/tslibs/timedeltas.cp313-win_amd64.pyd": {
-      "sha256": "252b1ac72e48edaa8e5d47aeaa333479d811f0fe0b816ab5f26b342488f7a63a",
-      "size": 440320
+      "sha256": "0c3b1822071e31e484b67950417e9d7270e960f9bbbed2401ff7d7af60176fc4",
+      "size": 340992
     },
     "_internal/pandas/_libs/tslibs/timestamps.cp313-win_amd64.pyd": {
-      "sha256": "07527314d9363b5b2363091d05bacb38880d6a5f1f11abb55725bddea4e9c030",
-      "size": 481280
+      "sha256": "3aa0be8f7339fb9da418c6a7b55393a54ad7867e08d2f00c8bf0541c2903b971",
+      "size": 369664
     },
     "_internal/pandas/_libs/tslibs/timezones.cp313-win_amd64.pyd": {
-      "sha256": "5a70ab8b6f9a82a62acfc5a65c8f3060f5365bffb2b1953e758db7ede8b2b454",
-      "size": 203776
+      "sha256": "8ccc0209eb8f9a83bbddcc2d008c1fe430d071a2de0b116f50c62a2af4e6f384",
+      "size": 96768
     },
     "_internal/pandas/_libs/tslibs/tzconversion.cp313-win_amd64.pyd": {
-      "sha256": "a0faa99a39017a12fb2cf9685a6ebf01a0e9a76ed5f4e7105feea42c1a707eda",
-      "size": 228864
+      "sha256": "2b5e99cca0807acbe675911b4637b910ce8af119f94b1e734c07833842f1c09c",
+      "size": 137728
     },
     "_internal/pandas/_libs/tslibs/vectorized.cp313-win_amd64.pyd": {
-      "sha256": "37bbea64ec2e0ee96734b76f588cebd40f78cc2b7867cd2f485c051d4186f467",
-      "size": 180224
+      "sha256": "6ce4e8a0ba1e34def3279a5cffcad78d2a85daebcdb4e51423645f87c0349b66",
+      "size": 77312
     },
     "_internal/pandas/_libs/window/aggregations.cp313-win_amd64.pyd": {
-      "sha256": "9468e6d0fcd7d5f414f2aeb19b3186ed2dd644c7e209108d137c11fbf2bf7540",
-      "size": 321536
+      "sha256": "e100205c527ef591557d9f9ed66744b9a83c8e09672f8c723cdd5b76255681dd",
+      "size": 334336
     },
     "_internal/pandas/_libs/window/indexers.cp313-win_amd64.pyd": {
-      "sha256": "18eed02fd77cafc97dfe822d5fb8515f8f3f0c6d12e630f4643a98cf11f025e4",
-      "size": 154112
+      "sha256": "8302c09b2164e9887acd72a12196dc82674fb18b996e6724877329d80109057a",
+      "size": 145408
     },
     "_internal/pandas.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll": {
       "sha256": "a4c2229bdc2a2a630acdc095b4d86008e5c3e3bc7773174354f3da4f5beb9cde",
