@@ -1,15 +1,15 @@
 {
-  "version": "2.0.1.5",
-  "generated_at": "2026-02-16T11:35:04.508488Z",
+  "version": "2.0.2",
+  "generated_at": "2026-02-25T15:44:36.624144Z",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/files",
   "files": {
     "Prisma.exe": {
-      "size": 23695311,
-      "sha256": "a4944438eb633f17c9b1f37b962a249cc6d741da30a37fbd537c31302457c96b"
+      "size": 23695605,
+      "sha256": "392ba994a7f40aa01dbdc8e220564aa8de25c70f60b35920ace85792691ad59f"
     },
     "_internal/base_library.zip": {
       "size": 1402457,
-      "sha256": "1c37bce0359a3625fb64a6ea9ddf6e6ba31c750312d26ae6b3f771b97b497e5d"
+      "sha256": "6e6008ba46658d11624fdca64cccd39fc46ef74f9e222de5c722d2f0d4ae9464"
     },
     "_internal/libcrypto-3.dll": {
       "size": 5229424,
@@ -2114,6 +2114,10 @@
     "_internal/pypdfium2_raw/pdfium.dll": {
       "size": 5778432,
       "sha256": "304ef954a0e38d2550b19ab3221d9dec328df68b4fe3ef80fec8d8e7c07ad0b8"
+    },
+    "_internal/pywin32_system32/pywintypes313.dll": {
+      "size": 135680,
+      "sha256": "9bb6dece38380abc747dce9ba8b0834a2bec469bc942dbcc8658e30ebdfb59a4"
     },
     "_internal/setuptools/_vendor/importlib_metadata-8.0.0.dist-info/INSTALLER": {
       "size": 4,
@@ -4638,6 +4642,10 @@
     "_internal/werkzeug-3.1.4.dist-info/licenses/LICENSE.txt": {
       "size": 1475,
       "sha256": "3b49dcee4105eb37bac10faf1be260408fe85d252b8e9df2e0979fc1e094437b"
+    },
+    "_internal/win32/win32pdh.pyd": {
+      "size": 34816,
+      "sha256": "38a92aff88f58e35824fdae5b202692d4e003142120bb5032f05332a350ba54e"
     },
     "_internal/yaml/_yaml.cp313-win_amd64.pyd": {
       "size": 253952,
