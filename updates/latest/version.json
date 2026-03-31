@@ -1,15 +1,15 @@
 {
-  "version": "3.2.1",
-  "generated_at": "2026-03-13T19:46:28.985885Z",
+  "version": "3.2.2",
+  "generated_at": "2026-03-31T11:45:49.819275Z",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/files",
   "files": {
     "Prisma.exe": {
-      "size": 23710625,
-      "sha256": "8086b84671e538fc2d6381c48cbf3af50e63351ba4d289e85f1cae26be4f135c"
+      "size": 24604948,
+      "sha256": "df5f5634569efc4695140b6f18857f696dfbb6a671a354d2e7bf394e2ac89ba8"
     },
     "_internal/base_library.zip": {
       "size": 1402457,
-      "sha256": "49773fc473cc24bdf8178e49a68ee900ae2a43b9bcde3f74d7c577a881cbbdd7"
+      "sha256": "9b058e4650926c4e43739a26a3669c4b88ee09a606bfd5aea55c33c520371b61"
     },
     "_internal/libcrypto-3.dll": {
       "size": 5229424,
@@ -78,6 +78,10 @@
     "_internal/_asyncio.pyd": {
       "size": 73048,
       "sha256": "53b36f719ee1905e56003a5d8af169fe05917787af66d00c86ceaf996a7d5caf"
+    },
+    "_internal/_brotli.cp313-win_amd64.pyd": {
+      "size": 856576,
+      "sha256": "a7f83086a999a01db0ca8cba6d476b4aa74ec2f96292cf4e17446dd30c085c61"
     },
     "_internal/_bz2.pyd": {
       "size": 86872,
@@ -2114,6 +2118,354 @@
     "_internal/pypdfium2_raw/pdfium.dll": {
       "size": 5778432,
       "sha256": "304ef954a0e38d2550b19ab3221d9dec328df68b4fe3ef80fec8d8e7c07ad0b8"
+    },
+    "_internal/pyphen/dictionaries/hyph_af_ZA.dic": {
+      "size": 62925,
+      "sha256": "541a45d73d92c69445613ec558c2c1a6829550d1a1ad8aa9dc6dfb752db87da1"
+    },
+    "_internal/pyphen/dictionaries/hyph_as_IN.dic": {
+      "size": 1642,
+      "sha256": "321ffb692c12792dddb4294ab5857821fc1ab8f2d0a8c0fcdced00200602ead6"
+    },
+    "_internal/pyphen/dictionaries/hyph_be_BY.dic": {
+      "size": 31963,
+      "sha256": "e4339b5a53d2f0fb4179c1060173788d5b6ed3f07bbbccb8b74f5cea614a809e"
+    },
+    "_internal/pyphen/dictionaries/hyph_bg_BG.dic": {
+      "size": 59388,
+      "sha256": "7dad4f2ccfce1909b27f53082cf57c7914809a8ba31ccbcee3dc817dcd7c7994"
+    },
+    "_internal/pyphen/dictionaries/hyph_ca.dic": {
+      "size": 28602,
+      "sha256": "4a4816e93a92df35819c5f4775106577aa279739a12c687291d747a3ce767b8b"
+    },
+    "_internal/pyphen/dictionaries/hyph_cs_CZ.dic": {
+      "size": 20049,
+      "sha256": "a378d024438b446ac0524237dc6d728dc520550db5fe0fb1fdbb47c2ee0ca525"
+    },
+    "_internal/pyphen/dictionaries/hyph_da_DK.dic": {
+      "size": 6049,
+      "sha256": "44d0dd1d85bcdb1e63003c97cd08924f10a8a8127380b1b07ac2e75a950c216b"
+    },
+    "_internal/pyphen/dictionaries/hyph_de_AT.dic": {
+      "size": 1093611,
+      "sha256": "3e0b4687479d25099e37ebd946998c08fcccc12a0acf9380d8b19319a50b9f3a"
+    },
+    "_internal/pyphen/dictionaries/hyph_de_CH.dic": {
+      "size": 1093611,
+      "sha256": "825159436515ab150d3da0ddf5eedb814c0ec6c7eec98fbd53e3ba5b2a4a1443"
+    },
+    "_internal/pyphen/dictionaries/hyph_de_DE.dic": {
+      "size": 1093611,
+      "sha256": "2e2f5ffea6bc53f67ffe8c076921c7b1b34a2ec2b9ec57a4608374bb65a1a1e1"
+    },
+    "_internal/pyphen/dictionaries/hyph_el_GR.dic": {
+      "size": 3205,
+      "sha256": "f2284153c3f9a809b959dcaeb349e00d90b4c4cf37c3d3a338b371c32f10e89d"
+    },
+    "_internal/pyphen/dictionaries/hyph_en_GB.dic": {
+      "size": 107031,
+      "sha256": "9fdc97f7faabcda30c15a9d53bc7fbf21daec795fb3c9a9588f7bdb30c563f41"
+    },
+    "_internal/pyphen/dictionaries/hyph_en_US.dic": {
+      "size": 106414,
+      "sha256": "486fb6840b1049d5d252ef784be11cd4dc2be0bf296568b74b41e4f4e17cba7d"
+    },
+    "_internal/pyphen/dictionaries/hyph_eo.dic": {
+      "size": 29876,
+      "sha256": "f2feb4cabe54b696affec72960b1670cfd9e4eae007854944bd02c0d348f59d7"
+    },
+    "_internal/pyphen/dictionaries/hyph_es.dic": {
+      "size": 5699,
+      "sha256": "b2e170c3c25f5de25447ca0acf6bc8baf9dd761e228e9646e2c25f2e7c47f4f6"
+    },
+    "_internal/pyphen/dictionaries/hyph_et_EE.dic": {
+      "size": 22637,
+      "sha256": "2ee13914fcd9e9b110e9e3d56e1d6acc28bf792c15b1b69efc2e71ac96c23c74"
+    },
+    "_internal/pyphen/dictionaries/hyph_eu.dic": {
+      "size": 1152,
+      "sha256": "5f499f513435a8432961750fae7b31bc5d3989b686a744c331bb75471a14b71b"
+    },
+    "_internal/pyphen/dictionaries/hyph_fr.dic": {
+      "size": 23631,
+      "sha256": "476ca60b958400c8b3fbe55764b4900df87acf60394ef62362705d9c701db191"
+    },
+    "_internal/pyphen/dictionaries/hyph_gl.dic": {
+      "size": 1420,
+      "sha256": "357355b82eb82ed081433503327ac4ba5b4f3606b6a3e50d69091d57eef4d5b8"
+    },
+    "_internal/pyphen/dictionaries/hyph_hr_HR.dic": {
+      "size": 7789,
+      "sha256": "77613ff6e907d2e9ffd93d45bfb16873aa9182e2215df276dbf850d1b0e28f65"
+    },
+    "_internal/pyphen/dictionaries/hyph_hu_HU.dic": {
+      "size": 937807,
+      "sha256": "354939e518b838dbfe01ab617c25c94586b1accc2d5bdcf57ba07406e8d1fee9"
+    },
+    "_internal/pyphen/dictionaries/hyph_id_ID.dic": {
+      "size": 104072,
+      "sha256": "ac53214620527f8a145ce4d70f0a3a5d336a145643b52547375aedacef558dc0"
+    },
+    "_internal/pyphen/dictionaries/hyph_is.dic": {
+      "size": 50011,
+      "sha256": "690ed04b72b60d05f66971ad9fd799656419228bfa8df00190adf02e27c0b1ef"
+    },
+    "_internal/pyphen/dictionaries/hyph_it_IT.dic": {
+      "size": 2308,
+      "sha256": "8c25b6fb62c2fb97586c6f7c6fb48f29f49e90a5c33c09ac9112dba6942b50cd"
+    },
+    "_internal/pyphen/dictionaries/hyph_kn_IN.dic": {
+      "size": 1592,
+      "sha256": "a15acb05a834979904330afda768accfa7fee10da386cc534d7944144eb1997f"
+    },
+    "_internal/pyphen/dictionaries/hyph_lt.dic": {
+      "size": 7817,
+      "sha256": "376e9fbdc09db5feb0025181d84242b6e01e02f413301f7d059fd99dc0597316"
+    },
+    "_internal/pyphen/dictionaries/hyph_lv_LV.dic": {
+      "size": 79409,
+      "sha256": "775d9a539fd8e98fabbfefd87af5887bb24eb4700b47ed5f8e360b0bab75b078"
+    },
+    "_internal/pyphen/dictionaries/hyph_mn_MN.dic": {
+      "size": 13486,
+      "sha256": "c49d5ead63948d84c75d43245d837a9d7c8dc36c2a97dc5e8a7ade031c7a00e9"
+    },
+    "_internal/pyphen/dictionaries/hyph_mr_IN.dic": {
+      "size": 2482,
+      "sha256": "740707cd6d149d1339e921e126a25dcea889712f4889fbc72434d753324409ed"
+    },
+    "_internal/pyphen/dictionaries/hyph_nb_NO.dic": {
+      "size": 186678,
+      "sha256": "c6c9b07d9f2c60bb47857fd629d9a453026312c894665d22c72e8e1699420f6c"
+    },
+    "_internal/pyphen/dictionaries/hyph_nl_NL.dic": {
+      "size": 116507,
+      "sha256": "0a97b76b259ed4165d094dedf9b6fb98c57734a437df0b5b263ee13e262d5f8f"
+    },
+    "_internal/pyphen/dictionaries/hyph_nn_NO.dic": {
+      "size": 186678,
+      "sha256": "c6c9b07d9f2c60bb47857fd629d9a453026312c894665d22c72e8e1699420f6c"
+    },
+    "_internal/pyphen/dictionaries/hyph_or_IN.dic": {
+      "size": 1535,
+      "sha256": "264b3a880fc7dc9f477abac80708172144ec3bb28baa8266539fe7ffff7a8a30"
+    },
+    "_internal/pyphen/dictionaries/hyph_pa_IN.dic": {
+      "size": 1534,
+      "sha256": "87b2e3d7dc8cc4e4f0bb1d6f4265e8d8eefa478fbc890a60839868af4f5c2c06"
+    },
+    "_internal/pyphen/dictionaries/hyph_pl_PL.dic": {
+      "size": 37931,
+      "sha256": "9fe3917ec1fb09b7ffa560e85fb810e098d45a9a45ad6d5c08311544dd92a100"
+    },
+    "_internal/pyphen/dictionaries/hyph_pt_BR.dic": {
+      "size": 11260,
+      "sha256": "a8eb1a64e4af4649c739211b397fa37b01f9d5774cf558fe3895fc3f26fd33a4"
+    },
+    "_internal/pyphen/dictionaries/hyph_pt_PT.dic": {
+      "size": 1288,
+      "sha256": "6f18ee89de6db21d9b06120a5527ec41d8132514fc112ccfe7d289ba91649840"
+    },
+    "_internal/pyphen/dictionaries/hyph_ro_RO.dic": {
+      "size": 34597,
+      "sha256": "24adbfe7cc2267ea5ce4afd34f7d69da5a9163ef3dd57b158bbb196b9d651e94"
+    },
+    "_internal/pyphen/dictionaries/hyph_ru_RU.dic": {
+      "size": 35415,
+      "sha256": "e9a6ae92765fc7e63d879f2ccf3f50f2b95bc8ed7618a6f31c34ce7d39844c83"
+    },
+    "_internal/pyphen/dictionaries/hyph_sa_IN.dic": {
+      "size": 1171,
+      "sha256": "e7f21be6f039cef24a3643ca7bc6d196bee1ee2661e53514f2c7e1392655d733"
+    },
+    "_internal/pyphen/dictionaries/hyph_sk_SK.dic": {
+      "size": 18205,
+      "sha256": "7359863ec5d5dbbf35c7d4f38faca1af7b43bc4aa643871e63f2dc0dfac4f922"
+    },
+    "_internal/pyphen/dictionaries/hyph_sl_SI.dic": {
+      "size": 8245,
+      "sha256": "3d9026755aa0936e9331595a08bb65c295ccac84acefe58cb6c9fe2ff11ceef8"
+    },
+    "_internal/pyphen/dictionaries/hyph_sq_AL.dic": {
+      "size": 127201,
+      "sha256": "99fbce3b0e60cc500e45643dd40903dfa71cfc1605a5b139cfb22129bd665dbe"
+    },
+    "_internal/pyphen/dictionaries/hyph_sr.dic": {
+      "size": 27355,
+      "sha256": "ce785026592f525c38e67152699224d47a4cdf555a1a4eb65d50458c5548f69f"
+    },
+    "_internal/pyphen/dictionaries/hyph_sr_Latn.dic": {
+      "size": 28392,
+      "sha256": "b423f910400472979a2b0fe1c95965c940e927f7588dace0e42c17f7b0663376"
+    },
+    "_internal/pyphen/dictionaries/hyph_sv.dic": {
+      "size": 102979,
+      "sha256": "44c5a59f1ef8a17b9433e4510a1abcac753d34ac875dc27ea95427f1e581f17b"
+    },
+    "_internal/pyphen/dictionaries/hyph_te_IN.dic": {
+      "size": 1592,
+      "sha256": "2ad470071dfd9bb3ad5101d528e1fb0090d96c841c4f2bb07b325476b3c853fe"
+    },
+    "_internal/pyphen/dictionaries/hyph_th_TH.dic": {
+      "size": 66279,
+      "sha256": "fbd19d561c19a13d1901a0b9653e24b4c0c2c81177064266e2acb23bac68145b"
+    },
+    "_internal/pyphen/dictionaries/hyph_uk_UA.dic": {
+      "size": 20222,
+      "sha256": "ae80645b757d6b57e5cdf34ab6cf7441a2414c60bff2352c7e815c1c12baad3d"
+    },
+    "_internal/pyphen/dictionaries/hyph_zu_ZA.dic": {
+      "size": 1956,
+      "sha256": "e75802e08127877d38891c140e8989af559665bae82f94d33c340cba2aa9de20"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_be_BY.txt": {
+      "size": 300,
+      "sha256": "ba3c76d7e9926426ecf93250db3f393c11bc372ec3a64fc49b9639291e809bf3"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_bg_BG.txt": {
+      "size": 3924,
+      "sha256": "26ca94269f58ad71be0985dbab8ed58e735bd9fffee4a17c6ae24575e1d16abf"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_ca.txt": {
+      "size": 636,
+      "sha256": "e053a287e45e5c655effa0cfc3e731832a824eded1d19ede0648a1f15e6d6a09"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_cs_CZ.txt": {
+      "size": 631,
+      "sha256": "adc50a58231a94ab7f225d9913da331f9dc2049128c9742cf60d0c32a8b04028"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_da_DK.txt": {
+      "size": 482,
+      "sha256": "600759b9f68b57a8432b9647bb132bb00a91953cf52b35c5daf65b7956b06501"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_de.txt": {
+      "size": 1738,
+      "sha256": "be7b3c67a66ea7185a69a3ce3b1e712cd6bb904dce8ac0eecdefd2f1a948baf3"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_el_GR.txt": {
+      "size": 525,
+      "sha256": "0b3e117f4ab079e7cbcdd7f4645f9a4f193ae123e6c781928597b27d22706aa7"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_en_GB.txt": {
+      "size": 4569,
+      "sha256": "6f3d1dddcf62d2d452801bd86289ad5826a30d15a502c0825f5c73715372db50"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_en_US.txt": {
+      "size": 1888,
+      "sha256": "9bcae072bff45cc0333d6b3c508c92d85b9065fc861c743c1506b303eba3f4a1"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_es.txt": {
+      "size": 1752,
+      "sha256": "0053b520c70ef49fdaa5beddf9bf4c76fcefb422748601a2f18a33ed923bcf8c"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_et_EE.txt": {
+      "size": 52957,
+      "sha256": "da273b8ec03e35774a426e9df047ad85253ec9e61a5c056f019d57c1395ef1cb"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_eu.txt": {
+      "size": 3697,
+      "sha256": "b0dcf82345f4a6a74e290cd7e7b43b73f8612e14ed5cec53ee736edaeb1d16b5"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_fr.txt": {
+      "size": 3738,
+      "sha256": "6951d9806c65c7f757d303061ca49cd7a1ddeddc552147f5c29de6540821f2cf"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_gl.txt": {
+      "size": 600,
+      "sha256": "2830f43a0a7e503765d59cc553a32bf1d342fee4e5dd7f0f19136b07e63e371b"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_hr_HR.txt": {
+      "size": 3598,
+      "sha256": "2ba15b47f64eba01489d2962a8c04c6e457a33bba418d6384bda30dfe9e23b65"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_hu_HU.txt": {
+      "size": 544,
+      "sha256": "17b76931dcd1936dcc3eb40fa69883c67a87dfe5134dd28a4fbf05c866a8cf9f"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_is.txt": {
+      "size": 34266,
+      "sha256": "64edf9fc3871e109a0b0d3a12d1ace5f7830b76d6de220e3d68679254e7969c7"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_it_IT.txt": {
+      "size": 949,
+      "sha256": "e6f356c3c49bc6016b6a635c20b468468eef6d011953a7051bbdfd56e17f0d3b"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_lt_LT.txt": {
+      "size": 780,
+      "sha256": "f21502551d0f668b6f1e7c76d6c6afa2e152b6c397a7049e2fea03776a5d1d52"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_lv_LV.txt": {
+      "size": 5782,
+      "sha256": "5e2cfa2c9a2b0ea1500c8cafca40256cbfec7de5dc46c5e4ca45950f76fd8659"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_NO.txt": {
+      "size": 341,
+      "sha256": "cf122e25bfa6f1694023a8afeb6e034197d46e78fb41df27cc45f9f23edcfdad"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_pl_PL.txt": {
+      "size": 1526,
+      "sha256": "99df1756a8d42e035e6ad6e79d2176a31ff71607a09300c9ace259895cc87403"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_pt_BR.txt": {
+      "size": 19284,
+      "sha256": "07400608865ce4c964cc443a9f354c733ca7f3f7d31f4463222b927cb7c54b87"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_pt_PT.txt": {
+      "size": 486,
+      "sha256": "62f19b9d8b42f2b0ff165ab434f40cfb4210a464f0662c31f6f99d77d0306e06"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_ro_RO.txt": {
+      "size": 488,
+      "sha256": "4808da6b026988000dd0943e86b77f312901e2759f11b1621e6512bddcbbe986"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_sk_SK.txt": {
+      "size": 252,
+      "sha256": "17b8f471cf1ec7b177d4a74bcd09e63cb4f122412b43d80489df6551985bdf27"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_sl_SI.txt": {
+      "size": 2765,
+      "sha256": "76e518bc5426ac5e3954f5168e7737a549ad7a3b6d3f81d6fd4473a1679940da"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_sq_AL.txt": {
+      "size": 423,
+      "sha256": "e4175731cfc7881f595d6d1753e061c36752ff191ac7030757ea00edd0a59359"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_sr.txt": {
+      "size": 284,
+      "sha256": "c552643a0490b8a68e4c5fb25cf3fb4b6605c2f5e8c9cfdf8dbc1a3c2845bd62"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_sv.txt": {
+      "size": 650,
+      "sha256": "eee15b8d93b2413256ae1cb8af7d1489935571e0eaf15d9b27bab1203d3aafc2"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_te_IN.txt": {
+      "size": 860,
+      "sha256": "fca0ff51f3bf572f9f6a408cd820e43e34c4d7d298e38169b32fbf5baac59c24"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_th_TH.txt": {
+      "size": 410,
+      "sha256": "32164b4ee0e25b3a46a7370a1b7370ab712bbe4d8abe1443965eec7f7edc30f4"
+    },
+    "_internal/pyphen/dictionaries/README_hyph_uk_UA.txt": {
+      "size": 957,
+      "sha256": "b5866714694f0e9a7c9d044984b4b39ec6289ade07fa7d2a083a31f5072f3529"
+    },
+    "_internal/pyphen/dictionaries/update.sh": {
+      "size": 251,
+      "sha256": "a9c1a8bf18ec6283ec7ffe10f5c65cc38119aae0be6b5d7711a6a7e3f9d9bd0b"
+    },
+    "_internal/Pythonwin/mfc140u.dll": {
+      "size": 5664848,
+      "sha256": "643ce7fe6a203c53a96a00f272a1a5b42d5b0c320c84364a6fe866307a19bb65"
+    },
+    "_internal/Pythonwin/win32ui.pyd": {
+      "size": 1051648,
+      "sha256": "8a9f51b9a5152ef0b0fe3c5017af1f7004036311bdb806eb7987305ce9f1651f"
+    },
+    "_internal/pywin32_system32/pythoncom313.dll": {
+      "size": 690176,
+      "sha256": "e312c8edb2d43a014daddfa984a805e6b5f933c60777e7b527332e682d9b1813"
     },
     "_internal/pywin32_system32/pywintypes313.dll": {
       "size": 135680,
@@ -4643,9 +4995,29 @@
       "size": 1475,
       "sha256": "3b49dcee4105eb37bac10faf1be260408fe85d252b8e9df2e0979fc1e094437b"
     },
+    "_internal/win32/win32api.pyd": {
+      "size": 135168,
+      "sha256": "b80722e54741563e72e264ca33e1900ee49c927c475e54ef8f94c3eac9032465"
+    },
+    "_internal/win32/win32event.pyd": {
+      "size": 29184,
+      "sha256": "b70d2aebb12d2a0c8d100f37e109319407cf025fc406ef23d13c1b5ddb64370a"
+    },
     "_internal/win32/win32pdh.pyd": {
       "size": 34816,
       "sha256": "38a92aff88f58e35824fdae5b202692d4e003142120bb5032f05332a350ba54e"
+    },
+    "_internal/win32/win32trace.pyd": {
+      "size": 24064,
+      "sha256": "a5f35e4db0dfe0c77871169b477e95c2b87609a75a376167b1e96220c008819a"
+    },
+    "_internal/win32/_win32sysloader.pyd": {
+      "size": 14848,
+      "sha256": "b11b641fc73ab5cc8853e0e7384147ee97056a2508927129dc385237e5a70b3a"
+    },
+    "_internal/win32com/shell/shell.pyd": {
+      "size": 543232,
+      "sha256": "65076be2fd14083da1f5b472a46608af9fd019616778880a856e737f67987dae"
     },
     "_internal/yaml/_yaml.cp313-win_amd64.pyd": {
       "size": 253952,
