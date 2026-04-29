@@ -20,6 +20,43 @@ from conciliador_pix_qrcode import ConciliacaoPixApp
 from conciliador_pix_maquineta import ConciliacaoPixMaquinetaApp
 import shutil
 from supabase_config import supabase
+from datetime import datetime
+
+
+def _to_iso(data_txt: str) -> str:
+    """Converte 'dd/mm/aaaa' ou 'aaaa-mm-dd' para 'aaaa-mm-dd'."""
+    try:
+        return datetime.strptime(data_txt, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return datetime.strptime(data_txt, "%d/%m/%Y").strftime("%Y-%m-%d")
+
+def extrair_cabecalho_memorando(pdf_path: str):
+    """Retorna (loja, data_ddmmyyyy) da 1ª página do PDF (título/cabeçalho)."""
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            if not pdf.pages:
+                return None, None
+            raw = pdf.pages[0].extract_text() or ""
+    except Exception:
+        return None, None
+    txt = " ".join(raw.split())
+    up = unidecode(txt).upper()
+
+    loja = None
+    m = re.search(r"\bLOJA\s+(\d{1,4})\b", up) or \
+        re.search(r"\bMEMORANDO\s+DE\s+CAIXA\s+LOJA\s+(\d{1,4})\b", up)
+    if m:
+        loja = m.group(1)
+
+    data_br = None
+    m = re.search(r"\bDATA\s+DO\s+CAIXA\s*:\s*(\d{2}/\d{2}/\d{4})\b", up) or \
+        re.search(r"\bEMISSAO\s*[: ]\s*(\d{2}/\d{2}/\d{4})\b", up)
+    if m:
+        data_br = m.group(1)
+
+    return loja, data_br
+
+
 
 if getattr(sys, 'frozen', False):
     BASE_DIR = Path(sys._MEIPASS)
@@ -1487,6 +1524,7 @@ def iniciar_analise_contabil():
               activebackground="#444444", activeforeground="#00bfff",
               relief="flat", bd=0, padx=10, pady=5).grid(row=0, column=2, sticky="w", padx=5)
 
+
     def executar():
         total_nota_vista = 0.0
         total_nota_prazo = 0.0
@@ -1596,10 +1634,13 @@ def iniciar_analise_contabil():
                         conta_bloco_atual = num_bloco
                         valores_por_forma = {}
                         continue 
+
                 if bloco_atual is not None:
                     cp = "" if pd.isna(row[COL_CONTA_PARTIDA]) else str(row[COL_CONTA_PARTIDA]).upper()
                     if "TOTAL DEB" in cp or "TOTAL CRED" in cp:
                         continue
+
+                    # Débito para bloco de devolução; caso contrário, Crédito
                     if conta_bloco_atual == conta_devol:
                         valor = pd.to_numeric(row[COL_DEBITO], errors='coerce')
                     else:
@@ -1609,22 +1650,34 @@ def iniciar_analise_contabil():
                     valor = float(valor)
 
                     conta_partida = extrair_conta_partida(row[COL_CONTA_PARTIDA])
-                    forma = formas_pagamento.get(conta_partida, "Reembolso Manaus" if conta_bloco_atual == conta_devol else "Outros")
 
-                    # >>> INÍCIO PATCH 1575 - prioriza regra especial quando conta = 1575
-                    if conta_partida == 1575:
-                        tipo_doc_especial = _classificar_1575_por_codigo_final(row[COL_DOC])
-                        if tipo_doc_especial:
-                            tipo_doc = tipo_doc_especial
-                        else:
-                            # fallback para regra padrão se não achar o padrão 'número - xxx -'
-                            tipo_doc = classificar_doc(row[COL_DOC])
+                    # -------- FIX #1: FORMA = "Cartão" para 2157/1253/1179 --------
+                    if conta_partida in (2157, 1253, 1179):
+                        forma = "Cartão"
                     else:
-                        tipo_doc = classificar_doc(row[COL_DOC])
-                    # >>> FIM PATCH 1575
+                        if conta_partida in (2157, 1253, 1179):
+                            forma = "Cartão"
+                        else:
+                            forma = formas_pagamento.get(
+                                conta_partida,
+                                "Reembolso Manaus" if bloco_atual == 446 else "Outros"
+                            )
 
+
+                    # -------- FIX #2: TIPO = "Nota Fiscal" para 1253/1179 --------
+                    # (demais contas usam a sua regra original classificar_doc)
+                    if conta_partida in (1253, 1179):
+                        tipo_doc = "NFS"
+                    else:
+                        try:
+                            doc_num = int(doc_raw)  # ou use sua classificar_doc se preferir
+                            tipo_doc = "NFCE" if 1 <= doc_num <= 100 else "NFS"
+                        except Exception:
+                            tipo_doc = "NFS"
+
+
+                    # ------ mantém SUA exibição/estrutura ------
                     chave = f"{forma} ({tipo_doc})"
-
                     valores_por_forma[chave] = valores_por_forma.get(chave, 0.0) + valor
 
                     if not (HIDE_DEVOLUCAO_NA_LISTAGEM and forma == "Devolução"):
@@ -1655,6 +1708,7 @@ def iniciar_analise_contabil():
             if bloco_atual is not None and valores_por_forma:
                 blocos[bloco_atual] = {"formas": valores_por_forma, "conta": conta_bloco_atual}
 
+            # ======= SUA EXIBIÇÃO MANTIDA =======
             saida.delete(1.0, tk.END)
             saida.insert(tk.END, "\nResumo por Bloco e Forma de Pagamento:\n")
 
@@ -1722,33 +1776,6 @@ def iniciar_analise_contabil():
         except Exception as e:
             messagebox.showerror("Erro", str(e))
 
-    frame = tk.Frame(janela, bg="#1e1e1e")
-    frame.pack(padx=20, pady=20)
-
-    btn_frame = tk.Frame(janela, bg="#1e1e1e")
-    btn_frame.pack(pady=10)
-
-    tk.Button(btn_frame, text="Executar Análise", command=executar,
-              font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
-              activebackground="#444444", activeforeground="#00bfff",
-              relief="flat", bd=0, padx=10, pady=5).grid(row=0, column=0, padx=5)
-
-    tk.Button(btn_frame, text="Voltar", command=janela.destroy,
-              font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
-              activebackground="#444444", activeforeground="#00bfff",
-              relief="flat", bd=0, padx=10, pady=5).grid(row=0, column=1, padx=5)
-
-    tk.Button(btn_frame, text="Limpar Resultados", command=lambda: saida.delete("1.0", tk.END),
-              font=("Segoe UI", 10), bg="#8b0000", fg="#ffffff",
-              activebackground="#E10000", activeforeground="#ffffff",
-              relief="flat", bd=0, padx=10, pady=5).grid(row=0, column=2, padx=5)
-
-
-
-    saida = scrolledtext.ScrolledText(janela, width=100, height=30,
-                                      bg="#2e2e2e", fg="#ffffff",
-                                      font=("Consolas", 10), insertbackground="#ffffff")
-    saida.pack(padx=10, pady=10)
 
 
 def iniciar_conciliacao():
@@ -1949,11 +1976,91 @@ FORMATS = {
 }
 
 def carregar_perfis():
-    """Lê perfis do JSON definido em controle.ARQUIVO_PERFIS."""
+    """
+    Lê perfis do Supabase (tabela 'perfis') e normaliza para o formato:
+      [{"nome": "...", "mes": "Março/2026", "lojas": [{"loja": "39"}, ...]}, ...]
+    Busca as LOJAS dentro de doc.jsonb (doc['lojas']) e também aceita
+    coluna 'lojas' caso exista. Não depende de 'ano'/'mes_num'.
+    """
     try:
-        with open(ARQUIVO_PERFIS, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
+        # Pega os campos que realmente existem na sua tabela
+        res = supabase.table("perfis").select("id, nome, mes, doc").execute()
+        rows = res.data or []
+
+        def _to_lojas_list(lojas_raw):
+            """Converte lojas em [{'loja':'xx'}, ...] aceitando dict/list/str/int."""
+            out = []
+            if isinstance(lojas_raw, list):
+                for item in lojas_raw:
+                    if isinstance(item, dict):
+                        if "loja" in item and item["loja"] is not None:
+                            out.append({"loja": str(item["loja"]).strip()})
+                        else:
+                            for k in ("id", "codigo", "cod", "store", "filial", "loja_id"):
+                                if k in item and item[k] is not None:
+                                    out.append({"loja": str(item[k]).strip()})
+                                    break
+                            else:
+                                if item:
+                                    k0 = next(iter(item))
+                                    out.append({"loja": str(item[k0]).strip()})
+                    elif item is not None:
+                        out.append({"loja": str(item).strip()})
+            elif isinstance(lojas_raw, str):
+                # "39,40;46|92" -> separa por vírgula / ; / |
+                seps = [",", ";", "|"]
+                used = next((s for s in seps if s in lojas_raw), None)
+                parts = lojas_raw.split(used) if used else [lojas_raw]
+                for v in parts:
+                    v = v.strip()
+                    if v:
+                        out.append({"loja": v})
+            elif lojas_raw is not None:
+                out.append({"loja": str(lojas_raw).strip()})
+            return out
+
+        perfis = []
+        for r in rows:
+            # Base: nome e mes das colunas text (já no padrão "NomeMês/AAAA")
+            nome = (r.get("nome") or "").strip() or "Sem nome"
+            mes_fmt = (r.get("mes") or "").strip()
+
+            # doc pode trazer 'lojas' (e até sobrescrever nome/mes, se desejar)
+            lojas_list = []
+            doc = r.get("doc")
+            # Se 'doc' vier como string por algum motivo, tenta decodificar
+            if isinstance(doc, str):
+                try:
+                    import json as _json
+                    doc = _json.loads(doc)
+                except Exception:
+                    doc = None
+            if isinstance(doc, dict):
+                if not mes_fmt:
+                    mes_fmt = (doc.get("mes") or "").strip()
+                if nome == "Sem nome":
+                    nome = (doc.get("nome") or "").strip() or nome
+                lojas_from_doc = doc.get("lojas")
+                if lojas_from_doc:
+                    lojas_list = _to_lojas_list(lojas_from_doc)
+
+            # fallback: se existir uma coluna 'lojas' direta (em algum ambiente)
+            if not lojas_list and "lojas" in r and r["lojas"] not in (None, "", []):
+                lojas_list = _to_lojas_list(r["lojas"])
+
+            perfis.append({
+                "nome": nome,
+                "mes": mes_fmt,              # "Março/2026" (igual à UI)
+                "lojas": lojas_list          # [{"loja":"39"}, ...]
+            })
+
+        return perfis
+
+    except Exception as e:
+        try:
+            messagebox.showerror("Perfis", f"Falha ao carregar perfis do banco:\n{e}")
+        except Exception:
+            print("Perfis (erro Supabase):", e)
         return []
 
 def meses_disponiveis(perfis):
@@ -2000,6 +2107,12 @@ def criar_pastas_por_perfil(mes_sel, perfil_escolhido, base, formato):
         perfis_mes = [p for p in perfis_mes if p.get("nome") == perfil_escolhido]
         if not perfis_mes:
             raise ValueError("Perfil selecionado não encontrado para este mês.")
+    
+    
+    print("[DEBUG] perfis_mes_count:", len(perfis_mes))
+    if perfis_mes:
+        print("[DEBUG] exemplo perfis_mes[0]:", perfis_mes[0])
+
 
     # Consolida lojas evitando duplicidades por nome de loja
     lojas_unicas = []
@@ -2082,7 +2195,6 @@ def criar_pastas_do_mes(ano, mes, base, formato):
         messagebox.showinfo("Concluído", f"✅ Pastas criadas: {criadas}\n📁 Já existentes: {existentes}")
     except Exception as e:
         messagebox.showerror("Erro", str(e))
-
 
 def iniciar_pastas():
     perfis = carregar_perfis()
@@ -2198,19 +2310,11 @@ def iniciar_comparador_diario():
         """
         Livro Fiscal x Contabilidade (comparador diário)
         - Mantém as regras existentes.
-        - Adiciona a regra ESPECIAL para a conta 1575:
-            DOC no formato 'numero - xxx -' (ou 'numero-xxx'):
-                xxx < 025  => classifica como NFCE (Cupom Fiscal)
-                xxx >= 025 => classifica como NFS  (Nota Fiscal)
+        - Regra ESPECIAL 1575: DOC no formato 'numero - xxx -' (xxx<025 -> NFCE; >=025 -> NFS)
         """
 
         # --- helper local: classifica NFCE/NFS pelo DOC quando a conta é 1575 ---
         def _nf_por_1575(doc_str):
-            """
-            Retorna 'NFCE' se xxx < 025, senão 'NFS'.
-            Aceita variações de espaços e hífen final opcional.
-            Exemplos válidos: '12345 - 007 -', '12345-007', '12345 - 025'
-            """
             try:
                 s = str(doc_str)
                 m = re.search(r'(\d+)\s*-\s*(\d{3})\s*-?', s)
@@ -2224,7 +2328,6 @@ def iniciar_comparador_diario():
         try:
             caminho_pdf = entry_pdf.get().strip()
             caminho_excel = entry_excel.get().strip()
-
             if not caminho_pdf or not caminho_excel:
                 messagebox.showwarning("Aviso", "Selecione os dois arquivos antes de executar.")
                 return
@@ -2238,7 +2341,6 @@ def iniciar_comparador_diario():
                     data_formatada = pd.to_datetime(data_raw, dayfirst=True).strftime('%d/%m')
                 except Exception:
                     data_formatada = None
-
                 if data_formatada:
                     tipo = "NFCE" if r["fiscal"] == "NFCE" else "NFS"
                     valor = r["valor_float"]
@@ -2248,9 +2350,8 @@ def iniciar_comparador_diario():
             # ---------------- Contabilidade (Excel) ----------------
             df = pd.read_excel(caminho_excel, header=None)
             contabilidade_por_dia = {}
-
             for _, row in df.iterrows():
-                # coluna 9 é valor (CREDITO) na sua planilha atual
+                # coluna 9 é valor (CRÉDITO) na sua planilha atual
                 valor = pd.to_numeric(row[9], errors='coerce')
                 if pd.isna(valor):
                     continue
@@ -2260,8 +2361,8 @@ def iniciar_comparador_diario():
                 if any(cfop in linha_texto for cfop in CFOPS_EXCLUIDOS):
                     continue
 
-                doc_raw = row[4]                 # DOC.NRO. (onde costuma vir 'numero - xxx -')
-                texto_valor = str(row[7]).upper()  # coluna com "CONTA (xxxx)" etc.
+                doc_raw = row[4]                     # DOC.NRO.
+                texto_valor = str(row[7]).upper()    # coluna com "CONTA (xxxx)" etc.
 
                 # extrai conta (3 ou 4 dígitos) a partir do texto da coluna de partida
                 match = pd.Series(texto_valor).str.extract(r'(\d{3,4})')
@@ -2269,26 +2370,30 @@ def iniciar_comparador_diario():
 
                 # -------- Classificação do tipo (NFCE x NFS) --------
                 if conta_num == 1575:
-                    # >>> REGRA ESPECIAL 1575: usa 'numero - xxx -'
+                    # regra especial baseada em "numero - xxx -" (se existir)
                     tipo_doc = _nf_por_1575(doc_raw)
                     if tipo_doc is None:
-                        # fallback para heurística antiga se não achar o padrão
+                        # fallback se não achar o padrão 'n - xxx -'
                         try:
                             doc_num = int(doc_raw)
                             tipo_doc = "NFCE" if 1 <= doc_num <= 100 else "NFS"
                         except Exception:
                             tipo_doc = "NFS"
-                elif "COLIGADAS" in texto_valor or conta_num == 1022 or conta_num == 430:
+                elif "COLIGADAS" in texto_valor or conta_num in (1022, 430):
                     tipo_doc = "NFS"
                 elif conta_num == 989 or "DEPÓSITO" in texto_valor:
                     tipo_doc = "NFCE"
                 else:
-                    # heurística padrão por faixa numérica do DOC
-                    try:
-                        doc_num = int(doc_raw)
-                        tipo_doc = "NFCE" if 1 <= doc_num <= 100 else "NFS"
-                    except Exception:
+                    # --------- AQUI ESTAVA O BUG ---------
+                    # usar conta_num (já extraída acima), não conta_partida
+                    if (conta_num is not None) and (conta_num in (1253, 1179)):
                         tipo_doc = "NFS"
+                    else:
+                        try:
+                            doc_num = int(doc_raw)
+                            tipo_doc = "NFCE" if 1 <= doc_num <= 100 else "NFS"
+                        except Exception:
+                            tipo_doc = "NFS"
 
                 # -------- Data (dd/mm) --------
                 data_raw = str(row[0]).strip()
@@ -2311,14 +2416,13 @@ def iniciar_comparador_diario():
                     contabilidade_por_dia.setdefault(data_formatada, {"NFCE": 0.0, "NFS": 0.0})
                     contabilidade_por_dia[data_formatada][tipo_doc] += valor
 
-            # ----- IMPRESSÃO / COMPARAÇÃO (visual compacto “uma linha por dia”) -----
+            # ----- IMPRESSÃO / COMPARAÇÃO -----
             todos_os_dias = sorted(
                 set(livro_por_dia.keys()) | set(contabilidade_por_dia.keys()),
                 key=lambda d: datetime.strptime(d, "%d/%m")
             )
 
             def _fmt(v):
-                # Formato BR: R$ 1.234,56
                 try:
                     return (f"R$ {float(v):,.2f}"
                             .replace(",", "X")
@@ -2327,48 +2431,42 @@ def iniciar_comparador_diario():
                 except Exception:
                     return "R$ 0,00"
 
-            # Limpa e título
             saida.delete("1.0", tk.END)
             saida.insert(tk.END, "📘 Livro × Contabilidade\n\n")
 
-            # Blocos por dia (multi-linha, como na visualização da direita)
+            # Blocos por dia (multi-linha)
             for dia in todos_os_dias:
                 livro_nfce = livro_por_dia.get(dia, {}).get("NFCE", 0.0)
-                livro_nfs  = livro_por_dia.get(dia, {}).get("NFS",  0.0)
+                livro_nfs  = livro_por_dia.get(dia, {}).get("NFS", 0.0)
                 cont_nfce  = contabilidade_por_dia.get(dia, {}).get("NFCE", 0.0)
-                cont_nfs   = contabilidade_por_dia.get(dia, {}).get("NFS",  0.0)
-
+                cont_nfs   = contabilidade_por_dia.get(dia, {}).get("NFS", 0.0)
                 saida.insert(tk.END, f"• Dia {dia}:\n")
-                saida.insert(tk.END, f"  Livro NFCE: {_fmt(livro_nfce)}\n")
-                saida.insert(tk.END, f"  Contab. NFCE: {_fmt(cont_nfce)}\n")
-                saida.insert(tk.END, f"  Livro NFS: {_fmt(livro_nfs)}\n")
-                saida.insert(tk.END, f"  Contab. NFS: {_fmt(cont_nfs)}\n\n")
-
+                saida.insert(tk.END, f" Livro NFCE: {_fmt(livro_nfce)}\n")
+                saida.insert(tk.END, f" Contab. NFCE: {_fmt(cont_nfce)}\n")
+                saida.insert(tk.END, f" Livro NFS: {_fmt(livro_nfs)}\n")
+                saida.insert(tk.END, f" Contab. NFS: {_fmt(cont_nfs)}\n\n")
 
             divergencias = []
-
-            # Linhas por dia — uma linha por data com os 4 valores resumidos
             for dia in todos_os_dias:
                 livro_nfce = livro_por_dia.get(dia, {}).get("NFCE", 0.0)
-                livro_nfs  = livro_por_dia.get(dia, {}).get("NFS",  0.0)
+                livro_nfs  = livro_por_dia.get(dia, {}).get("NFS", 0.0)
                 cont_nfce  = contabilidade_por_dia.get(dia, {}).get("NFCE", 0.0)
-                cont_nfs   = contabilidade_por_dia.get(dia, {}).get("NFS",  0.0)
-
-                # Guarda divergências para a seção específica
+                cont_nfs   = contabilidade_por_dia.get(dia, {}).get("NFS", 0.0)
                 if abs(livro_nfce - cont_nfce) > 0.01:
                     divergencias.append((dia, "NFCE", livro_nfce, cont_nfce))
                 if abs(livro_nfs - cont_nfs) > 0.01:
                     divergencias.append((dia, "NFS",  livro_nfs,  cont_nfs))
 
-            # Seção de divergências (uma linha por divergência)
             if divergencias:
                 saida.insert(tk.END, "\n🚨 Divergências encontradas:\n")
                 for dia, tipo, v_livro, v_contab in divergencias:
                     diff = v_livro - v_contab
                     saida.insert(
                         tk.END,
-                        f"• Dia {dia} | {tipo} | "
-                        f"Livro: {_fmt(v_livro)} | Contab: {_fmt(v_contab)} | Dif: {_fmt(diff)}\n"
+                        f"• Dia {dia}  {tipo}  "
+                        f"Livro: {_fmt(v_livro)}  "
+                        f"Contab: {_fmt(v_contab)}  "
+                        f"Dif: {_fmt(diff)}\n"
                     )
             else:
                 saida.insert(tk.END, "\n✅ Nenhuma divergência encontrada.\n")
@@ -2588,6 +2686,8 @@ def calcular_saidas_diversas(df):
     receb_spm_cartao = saida[desc.str.contains("RECEBIMENTOS SPM CARTAO", na=False)].sum()
     receb_spm_dh_pix = saida[desc.str.contains("RECEBIMENTOS SPM DH/PIX", na=False)].sum()
     reembolso_fin_manaus = saida[desc.str.contains("REEMBOLSO FINANCEIRO MANAUS", na=False)].sum()
+    sucata_pgto_fin = saida[desc.str.contains("SUCATA BATERIA-PGTO FINANCEIRO", na=False)
+    ].sum()
     devolucao_acerto_estoque = saida[desc.str.contains("DEVOLUCAO ACERTO DE ESTOQUE", na=False)].sum()   
     pneu_oleo_usado = saida[
         (desc.str.contains("VENDA DE PNEU/OLEO - USADO", na=False)) |
@@ -2596,6 +2696,7 @@ def calcular_saidas_diversas(df):
     ].sum()
 
     resultados = {
+        "SUCATA BATERIA-PGTO FINANCEIRO": float(sucata_pgto_fin),
         "SUCATA SMARTINS": float(sucata_smartins),
         "SUCATA PMZ": float(sucata_pmz),
         "TOTAL SUCATA": float(total_sucata),
@@ -2611,7 +2712,7 @@ def calcular_saidas_diversas(df):
     total_geral = (
         resultados["TOTAL SUCATA"] + resultados["RESGATE DE VALE"] + resultados["DEVOLUÇÃO COMPRA/CONSUMO"]
         + resultados["RECEBIMENTOS SPM CARTAO"] + resultados["RECEBIMENTOS SPM DH/PIX"]
-        + resultados["REEMBOLSO FINANCEIRO MANAUS"] + resultados["DEVOLUCAO ACERTO DE ESTOQUE"] + resultados["VENDA DE PNEU/ÓLEO - USADO"]
+        + resultados["REEMBOLSO FINANCEIRO MANAUS"] + resultados["SUCATA BATERIA-PGTO FINANCEIRO"] + resultados["DEVOLUCAO ACERTO DE ESTOQUE"] + resultados["VENDA DE PNEU/ÓLEO - USADO"]
     )
     return resultados, float(total_geral)
 
@@ -2669,7 +2770,58 @@ def extrair_dev_cartao_canc_portal_texto(pdf_path):
         pass
     return None
 
+def extrair_valores_prazo_texto(pdf_path):
+    """
+    Extrai do texto do PDF (fora das tabelas) os valores:
+      - VENDAS A PRAZO COLIGADA
+      - VENDAS A PRAZO
+      - DEVOLUCAO A PRAZO
+      - DEVOLUCOES DO CLIENTE A PRAZO
 
+    Retorna dict com floats.
+    """
+    import pdfplumber
+    resultados = {
+        "vendas_prazo_coligada": 0.0,
+        "vendas_prazo": 0.0,
+        "devolucao_prazo": 0.0,
+        "devolucoes_cliente_prazo": 0.0,
+    }
+
+    # Expressões mais tolerantes (permitem espaços, maiúsculas/minúsculas, acentos removidos)
+    padroes = {
+        "vendas_prazo_coligada": re.compile(
+            r"VENDAS?\s+A\s+PRAZO\s+COLIGADA\s+([0-9\.,]+)", re.IGNORECASE
+        ),
+        "vendas_prazo": re.compile(
+            r"VENDAS?\s+A\s+PRAZO\s+([0-9\.,]+)", re.IGNORECASE
+        ),
+        "devolucao_prazo": re.compile(
+            r"DEVOLUCAO\s+A\s+PRAZO\s+([0-9\.,]+)", re.IGNORECASE
+        ),
+        "devolucoes_cliente_prazo": re.compile(
+            r"DEVOLUCOES?\s+DO\s+CLIENTE\s+A\s+PRAZO\s+([0-9\.,]+)", re.IGNORECASE
+        ),
+    }
+
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            texto_completo = ""
+            for page in pdf.pages:
+                texto_completo += "\n" + (page.extract_text() or "")
+
+            # Extrair os valores
+            for chave, rgx in padroes.items():
+                m = rgx.search(texto_completo)
+                if m:
+                    valor_str = m.group(1)
+                    valor_num = parse_brl_to_float(valor_str)
+                    resultados[chave] = valor_num
+
+    except Exception as e:
+        print("Erro ao extrair valores a prazo:", e)
+
+    return resultados
 
 def parse_brl_to_float(s):
     if not s:
@@ -2845,6 +2997,7 @@ def calcular_remessas(df, resultados_vendas, resultados_receb, resultados_saidas
         + resultados_saidas.get("TOTAL SUCATA", 0.0)
         + resultados_saidas.get("RECEBIMENTOS SPM DH/PIX", 0.0)
         + resultados_saidas.get("REEMBOLSO FINANCEIRO MANAUS", 0.0)
+        + resultados_saidas.get("SUCATA BATERIA-PGTO FINANCEIRO", 0.0)
         + resultados_saidas.get("DEVOLUCAO ACERTO DE ESTOQUE", 0.0)
         + float(resultados_receb.get("ABATIMENTO", 0.0))
         + resultados_saidas.get("VENDA DE PNEU/ÓLEO - USADO", 0.0)
@@ -2877,10 +3030,157 @@ def calcular_remessas(df, resultados_vendas, resultados_receb, resultados_saidas
     resultados["TOTAL FINAL REMESSAS"] = {"Remessa": float(total_final_remessas), "Saídas": 0.0, "Diferença": 0.0}
     return resultados
 
+def _to_number_safe(col):
+    # Igual ao da sua referência (robusto p/ string, BR e numérico)
+    from pandas.api.types import is_numeric_dtype
+    if is_numeric_dtype(col):
+        return pd.to_numeric(col, errors='coerce')
+    s = (col.astype(str)
+            .str.strip()
+            .str.replace(r'[^\d,.\-]', '', regex=True))
+    has_comma = s.str.contains(',', regex=False)
+    has_dot = s.str.contains('.', regex=False)
+    mask_both = has_comma & has_dot
+    s.loc[mask_both] = (s.loc[mask_both]
+                            .str.replace('.', '', regex=False)
+                            .str.replace(',', '.', regex=False))
+    mask_only_comma = has_comma & ~has_dot
+    s.loc[mask_only_comma] = s.loc[mask_only_comma].str.replace(',', '.', regex=False)
+    return pd.to_numeric(s, errors='coerce')
+
+
+def calcular_dinheiro_remetido_core(caminho_excel: str, data_ini_str: str = "", data_fim_str: str = ""):
+    """
+    Replica a MESMA lógica e os MESMOS campos da 'tela de dinheiro remetido' de referência:
+      - Filtra rodapés/somatórios
+      - Aplica período opcional (dd/mm/aaaa)
+      - Lista por dia: remetido = soma(DÉBITO) - soma(CRÉDITO)
+      - Resumo:
+          * Total Anterior (coluna E), quando existir
+          * Total Saldo Final (coluna G), quando existir
+          * Total Remetido no Período (soma das linhas por dia)
+
+    Retorna:
+      por_dia_df (DataFrame com colunas ['data','remetido'] já ordenado)
+      total_periodo (float)
+      total_anterior_val (float|None)
+      total_saldo_final_val (float|None)
+    """
+    if not caminho_excel:
+        raise ValueError("Informe o caminho do Excel.")
+
+    # Tenta xlrd (xls). Se falhar, usa engine padrão (xlsx)
+    try:
+        df = pd.read_excel(caminho_excel, header=None, engine='xlrd')
+    except Exception:
+        df = pd.read_excel(caminho_excel, header=None)
+
+    # Colunas conforme a sua planilha
+    COL_DATA = 0
+    COL_HIST = 5
+    COL_CONTA_PARTIDA = 7
+    COL_DEBITO = 8
+    COL_CREDITO = 9
+    COL_E = 2
+    COL_G = 6
+
+    deb = _to_number_safe(df[COL_DEBITO])
+    cred = _to_number_safe(df[COL_CREDITO])
+    col_E = _to_number_safe(df[COL_E])
+    col_G = _to_number_safe(df[COL_G])
+
+    # Texto completo da linha p/ mascarar rodapés e totais
+    linha_texto = (
+        df.apply(lambda s: " ".join("" if pd.isna(v) else str(v) for v in s), axis=1)
+          .str.upper()
+          .str.strip()
+    )
+
+    # Cabeçalhos/rodapés/totalizações (iguais à referência)
+    mask_total_anterior = linha_texto.str.contains(r'\bTOTAL\s+ANTERIOR\b', regex=True, na=False)
+    mask_saldo_final    = linha_texto.str.contains(r'\bTOTAL\s+SALDO\s+FINAL\b', regex=True, na=False)
+    eh_dev_total        = linha_texto.str.contains(r'\bDEV\.?\s*TOTAL\b', regex=True, na=False)
+
+    total_anterior_val  = float(col_E.where(mask_total_anterior).sum()) if mask_total_anterior.any() else None
+    total_saldo_final_val = float(col_G.where(mask_saldo_final).sum()) if mask_saldo_final.any() else None
+
+    padrao_rodape = (
+        r'(?:^\s)TOTAL\s+ANTERIOR\b'
+        r'|(?:^\s)TOTAL\s+SALDO\s+FINAL\b'
+        r'|(?:^\s)TOTAL\s+DEB\s*/\s*CRED\b'
+        r'|^\s*TOTAL\s'
+    )
+    eh_rodape = linha_texto.str.contains(padrao_rodape, regex=True, na=False) & ~eh_dev_total
+
+    # Só considera linhas com débito ou crédito E que não sejam rodapé
+    mask_valor = ((deb.notna() & (deb != 0)) | (cred.notna() & (cred != 0)))
+    mask_valid = mask_valor & ~eh_rodape
+
+    deb = deb.where(mask_valid, other=0.0).fillna(0.0)
+    cred = cred.where(mask_valid, other=0.0).fillna(0.0)
+
+    # Datas → datetime
+    datas_raw = df[COL_DATA]
+    if not pd.api.types.is_datetime64_any_dtype(datas_raw):
+        datas = pd.to_datetime(datas_raw, errors='coerce', dayfirst=True)
+    else:
+        datas = pd.to_datetime(datas_raw)
+
+    # Período opcional
+    data_ini = pd.to_datetime(data_ini_str, dayfirst=True, errors='coerce') if data_ini_str else None
+    data_fim = pd.to_datetime(data_fim_str, dayfirst=True, errors='coerce') if data_fim_str else None
+
+    if data_ini_str and pd.isna(data_ini):
+        raise ValueError("Data inicial inválida. Use dd/mm/aaaa.")
+    if data_fim_str and pd.isna(data_fim):
+        raise ValueError("Data final inválida. Use dd/mm/aaaa.")
+
+    mask_data = datas.notna()
+    if data_ini is not None:
+        mask_data &= datas >= data_ini
+    if data_fim is not None:
+        mask_data &= datas <= data_fim
+
+    deb_f  = deb.where(mask_data,  other=0.0)
+    cred_f = cred.where(mask_data, other=0.0)
+
+    df_calc = pd.DataFrame({
+        "data": datas.dt.date,
+        "deb": deb_f,
+        "cred": cred_f,
+        "linha_txt": linha_texto
+    })
+    # Garante que só contemple linhas com movimentação
+    df_calc = df_calc[df_calc['data'].notna() & ((df_calc['deb'] != 0) | (df_calc['cred'] != 0))]
+
+    mask_sucata = df_calc["linha_txt"].str.contains(r"\bSUCATA\b", na=False, regex=True)
+    sucata_total = float(df_calc.loc[mask_sucata, "cred"].sum())
+
+    por_dia = (
+        df_calc
+        .groupby('data')
+        .apply(lambda x: float(x['deb'].sum() - x['cred'].sum()))
+        .reset_index(name='remetido')
+        .sort_values('data')
+    )
+
+    total_periodo = float(por_dia['remetido'].sum()) if not por_dia.empty else 0.0
+    return por_dia, total_periodo, total_anterior_val, total_saldo_final_val,sucata_total
+
 
 def abrir_analise_memorando():
+    import tkinter as tk
+    from tkinter import ttk, filedialog, messagebox, scrolledtext
+    import pandas as pd
+    import re
+    from unidecode import unidecode
+    from datetime import datetime, date
+
+    # ============================
+    # UI raiz
+    # ============================
     janela = tk.Toplevel(root)
-    janela.title("Análise de Memorando")
+    janela.title("Conferência de Caixa")
     janela.configure(bg="#1e1e1e")
     if icone:
         janela.iconphoto(False, icone)
@@ -2890,20 +3190,36 @@ def abrir_analise_memorando():
         janela.destroy()
     janela.protocol("WM_DELETE_WINDOW", ao_fechar)
 
-    frame = tk.Frame(janela, bg="#1e1e1e")
-    frame.pack(padx=20, pady=20, fill="x")
+    
+    style = ttk.Style()
+    style.theme_use("default")
 
-    tk.Label(
-        frame,
-        text="Memorando Geral:",
-        font=("Segoe UI", 10),
-        bg="#1e1e1e",
-        fg="#ffffff"
-    ).grid(row=0, column=0, sticky="w")
+    # Cor de fundo da barra de abas
+    style.configure("TNotebook", background="#1e1e1e", borderwidth=0)
 
-    entry_arquivo = tk.Entry(frame, font=("Segoe UI", 10), width=50)
-    entry_arquivo.grid(row=0, column=1, sticky="we", padx=10)
-    frame.grid_columnconfigure(1, weight=1)
+    # Cor das abas (normais)
+    style.configure("TNotebook.Tab", background="#1e1e1e", foreground="white")
+
+    # Cor da aba selecionada
+    style.map(
+        "TNotebook.Tab",
+        background=[("selected", "#2e2e2e")],
+        foreground=[("selected", "white")]
+    )
+
+
+    # ============================
+    # TOPO: campos + Excel opcional da contabilidade
+    # ============================
+    topo = tk.Frame(janela, bg="#1e1e1e")
+    topo.pack(padx=20, pady=12, fill="x")
+
+    # Memorando (PDF)
+    tk.Label(topo, text="Memorando Geral:", font=("Segoe UI", 10),
+             bg="#1e1e1e", fg="#ffffff").grid(row=0, column=0, sticky="w")
+    entry_pdf = tk.Entry(topo, font=("Segoe UI", 10))
+    entry_pdf.grid(row=0, column=1, sticky="we", padx=8)
+    topo.grid_columnconfigure(1, weight=1)
 
     def selecionar_pdf():
         caminho = filedialog.askopenfilename(
@@ -2911,196 +3227,1159 @@ def abrir_analise_memorando():
             filetypes=[("PDF files", "*.pdf")]
         )
         if caminho:
-            entry_arquivo.delete(0, tk.END)
-            entry_arquivo.insert(0, caminho)
+            entry_pdf.delete(0, tk.END)
+            entry_pdf.insert(0, caminho)
+            # Autopreenche loja/data
+            try:
+                loja_auto, data_auto = extrair_cabecalho_memorando(caminho)
+                if loja_auto:
+                    entry_loja.delete(0, tk.END)
+                    entry_loja.insert(0, loja_auto)
+                if data_auto:
+                    entry_data.delete(0, tk.END)
+                    entry_data.insert(0, data_auto)
+            except Exception as e:
+                print("WARN: autopreenchimento falhou:", e)
 
     tk.Button(
-        frame,
-        text="Selecionar",
-        command=selecionar_pdf,
-        font=("Segoe UI", 10),
-        bg="#2e2e2e",
-        fg="#ffffff",
-        activebackground="#444444",
-        activeforeground="#00bfff",
-        relief="flat",
-        bd=0,
-        padx=10,
-        pady=5
-    ).grid(row=0, column=2, sticky="w", padx=5)
+        topo, text="Selecionar...", command=selecionar_pdf,
+        font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
+        activebackground="#444444", activeforeground="#00bfff",
+        relief="flat", bd=0, padx=10, pady=5
+    ).grid(row=0, column=2, padx=5)
 
-    btn_frame = tk.Frame(janela, bg="#1e1e1e")
-    btn_frame.pack(pady=10)
+    # Loja / Data
+    tk.Label(topo, text="Loja:", font=("Segoe UI", 10),
+             bg="#1e1e1e", fg="#ffffff").grid(row=1, column=0, sticky="w", pady=(6, 0))
+    entry_loja = tk.Entry(topo, font=("Segoe UI", 10), width=12)
+    entry_loja.grid(row=1, column=1, sticky="w", padx=8, pady=(6, 0))
 
-    def executar(
+    tk.Label(topo, text="Data (dd/mm/aaaa):", font=("Segoe UI", 10),
+             bg="#1e1e1e", fg="#ffffff").grid(row=1, column=2, sticky="e", pady=(6, 0))
+    entry_data = tk.Entry(topo, font=("Segoe UI", 10), width=14)
+    entry_data.grid(row=1, column=3, sticky="w", padx=8, pady=(6, 0))
+
+    # ============================
+    # Notebook com 3 abas
+    # ============================
+    nb = ttk.Notebook(janela)
+    nb.pack(fill="both", expand=True, padx=10, pady=(6, 10))
+
+    # Aba 1: Memorando
+    aba_memo = tk.Frame(nb, bg="#1e1e1e")
+    nb.add(aba_memo, text="Memorando")
+
+    memo_btns = tk.Frame(aba_memo, bg="#1e1e1e")
+    memo_btns.pack(pady=6)
+
+    memo_saida = scrolledtext.ScrolledText(
+        aba_memo, width=110, height=30,
+        bg="#2e2e2e", fg="#ffffff",
+        font=("Consolas", 10), insertbackground="#ffffff"
+    )
+    memo_saida.pack(padx=8, pady=8, fill="both", expand=True)
+
+    # Aba 2: Contabilidade
+    aba_conf = tk.Frame(nb, bg="#1e1e1e")
+    nb.add(aba_conf, text="Contabilidade")
+
+    conf_btns = tk.Frame(aba_conf, bg="#1e1e1e")
+    conf_btns.pack(pady=6)
+
+    # === Seletor do Excel (dentro da aba Contabilidade) ===
+    conf_top = tk.Frame(aba_conf, bg="#1e1e1e")
+    conf_top.pack(fill="x", padx=10, pady=(4, 0))
+
+    tk.Label(conf_top, text="Razão Modelo I - Intervalo de Contas:", font=("Segoe UI", 10),
+            bg="#1e1e1e", fg="#ffffff").grid(row=0, column=0, sticky="w")
+
+    entry_contab = tk.Entry(conf_top, font=("Segoe UI", 10))
+    entry_contab.grid(row=0, column=1, sticky="we", padx=8)
+    conf_top.grid_columnconfigure(1, weight=1)
+
+    def selecionar_excel_conf():
+        caminho = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
+        if caminho:
+            entry_contab.delete(0, tk.END)
+            entry_contab.insert(0, caminho)
+
+    tk.Button(conf_top, text="Selecionar...", command=selecionar_excel_conf,
+            font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
+            activebackground="#444444", activeforeground="#00bfff",
+            relief="flat", bd=0, padx=10, pady=5).grid(row=0, column=2, padx=5)
+
+    conf_saida = scrolledtext.ScrolledText(
+        aba_conf, width=110, height=30,
+        bg="#2e2e2e", fg="#ffffff",
+        font=("Consolas", 10), insertbackground="#ffffff"
+    )
+    conf_saida.pack(padx=8, pady=8, fill="both", expand=True)
+
+    # =========================================================
+    # Aba 3: Dinheiro Remetido (somente Excel, sem datas)
+    # =========================================================
+    aba_rem = tk.Frame(nb, bg="#1e1e1e")
+    nb.add(aba_rem, text="Dinheiro Remetido")
+
+    rem_top = tk.Frame(aba_rem, bg="#1e1e1e")
+    rem_top.pack(fill="x", padx=10, pady=8)
+
+    tk.Label(rem_top, text="Razão Modelo I - Conta 6:", font=("Segoe UI", 10),
+            bg="#1e1e1e", fg="#ffffff").grid(row=0, column=0, sticky="w")
+
+    entry_rem_arquivo = tk.Entry(rem_top, font=("Segoe UI", 10), width=48)
+    entry_rem_arquivo.grid(row=0, column=1, padx=8, sticky="we")
+    rem_top.grid_columnconfigure(1, weight=1)
+
+    def selecionar_rem_excel():
+        caminho = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
+        if caminho:
+            entry_rem_arquivo.delete(0, tk.END)
+            entry_rem_arquivo.insert(0, caminho)
+
+    tk.Button(rem_top, text="Selecionar...", command=selecionar_rem_excel,
+            font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
+            relief="flat", padx=10, pady=5).grid(row=0, column=2, padx=5)
+
+    rem_btns = tk.Frame(aba_rem, bg="#1e1e1e")
+    rem_btns.pack(pady=6)
+
+    rem_saida = scrolledtext.ScrolledText(
+        aba_rem, width=110, height=26, bg="#2e2e2e", fg="#ffffff",
+        font=("Consolas", 10), insertbackground="#ffffff"
+    )
+    rem_saida.pack(padx=10, pady=8, fill="both", expand=True)
+
+
+    def _fmt_brl(v):
+        try:
+            return (f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        except Exception:
+            return "R$ 0,00"
+
+    def _executar_dinheiro_remetido():
+        try:
+            caminho = entry_rem_arquivo.get().strip()
+            if not caminho:
+                messagebox.showwarning("Aviso", "Selecione o arquivo Excel antes de executar.")
+                return
+
+            # Chamamos o núcleo com strings vazias para data (sem filtro por período)
+            por_dia, total_periodo, total_anterior_val, total_saldo_final_val, sucata_total = \
+                calcular_dinheiro_remetido_core(caminho, "", "")
+
+            # ——— Saída idêntica à tela referência ———
+            rem_saida.delete("1.0", tk.END)
+
+            # 1) Totais (no topo), com ◊ e em MAIÚSCULAS
+            if total_anterior_val is not None:
+                rem_saida.insert(tk.END, f"◊ TOTAL ANTERIOR: {_fmt_brl(total_anterior_val)}\n")
+            if total_saldo_final_val is not None:
+                rem_saida.insert(tk.END, f"◊ TOTAL SALDO FINAL: {_fmt_brl(total_saldo_final_val)}\n")
+
+            rem_saida.insert(tk.END, f"◊ PAGAMENTO DE SUCATA (no período): {_fmt_brl(sucata_total)}\n")
+            rem_saida.insert(tk.END, "\n")
+
+            # 2) Cabeçalho de lista diária
+            rem_saida.insert(tk.END, "Remetido por dia (Débito – Crédito):\n")
+
+            # 3) Linhas por dia
+            if por_dia.empty:
+                rem_saida.insert(tk.END, " - (sem lançamentos no período)\n")
+            else:
+                for _, r in por_dia.iterrows():
+                    d = pd.to_datetime(r['data']).strftime('%d/%m/%Y')
+                    v = float(r['remetido'])
+                    rem_saida.insert(tk.END, f" - {d}: {_fmt_brl(v)}\n")
+
+            rem_saida.insert(tk.END, "\n")
+
+            # 4) Total do período (no rodapé), também com ◊
+            rem_saida.insert(tk.END, f"◊ Total remetido no período: {_fmt_brl(total_periodo)}\n")
+
+        except Exception as e:
+            messagebox.showerror("Erro", f"Falha ao calcular Dinheiro Remetido:\n{e}")
+
+    tk.Button(rem_btns, text="Calcular", command=_executar_dinheiro_remetido,
+            font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
+            relief="flat", padx=10, pady=6).grid(row=0, column=0, padx=5)
+
+    tk.Button(rem_btns, text="Limpar", command=lambda: rem_saida.delete("1.0", tk.END),
+            font=("Segoe UI", 10), bg="#8b0000", fg="#ffffff",
+            relief="flat", padx=10, pady=6).grid(row=0, column=1, padx=5)
+
+    # =========================================================
+    # Aba 4: Relatórios de Notas (à vista / a prazo)
+    # =========================================================
+    aba_rel_notas = tk.Frame(nb, bg="#1e1e1e")
+    nb.add(aba_rel_notas, text="Relatórios de Notas")
+
+    rel_top = tk.Frame(aba_rel_notas, bg="#1e1e1e")
+    rel_top.pack(fill="x", padx=10, pady=8)
+
+    # Seletor: Notas à Vista (PDF)
+    tk.Label(rel_top, text="Notas à Vista (PDF):", font=("Segoe UI", 10),
+            bg="#1e1e1e", fg="#ffffff").grid(row=0, column=0, sticky="w", pady=2)
+    entry_notas_vista = tk.Entry(rel_top, font=("Segoe UI", 10))
+    entry_notas_vista.grid(row=0, column=1, sticky="we", padx=8, pady=2)
+    rel_top.grid_columnconfigure(1, weight=1)
+
+    def selecionar_pdf_notas(entry_widget):
+        caminho = filedialog.askopenfilename(
+            title="Selecione o PDF do relatório",
+            filetypes=[("PDF files", "*.pdf")]
+        )
+        if caminho:
+            entry_widget.delete(0, tk.END)
+            entry_widget.insert(0, caminho)
+
+    tk.Button(
+        rel_top, text="Selecionar...", command=lambda: selecionar_pdf_notas(entry_notas_vista),
+        font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
+        activebackground="#444444", activeforeground="#00bfff",
+        relief="flat", bd=0, padx=10, pady=5
+    ).grid(row=0, column=2, padx=5, pady=2)
+
+    # Seletor: Notas a Prazo (PDF)
+    tk.Label(rel_top, text="Notas a Prazo (PDF):", font=("Segoe UI", 10),
+            bg="#1e1e1e", fg="#ffffff").grid(row=1, column=0, sticky="w", pady=2)
+    entry_notas_prazo = tk.Entry(rel_top, font=("Segoe UI", 10))
+    entry_notas_prazo.grid(row=1, column=1, sticky="we", padx=8, pady=2)
+    tk.Button(
+        rel_top, text="Selecionar...", command=lambda: selecionar_pdf_notas(entry_notas_prazo),
+        font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
+        activebackground="#444444", activeforeground="#00bfff",
+        relief="flat", bd=0, padx=10, pady=5
+    ).grid(row=1, column=2, padx=5, pady=2)
+
+    # Botões de ação
+    rel_btns = tk.Frame(aba_rel_notas, bg="#1e1e1e")
+    rel_btns.pack(pady=(0, 6))
+
+    notas_saida = scrolledtext.ScrolledText(
+        aba_rel_notas, width=110, height=26, bg="#2e2e2e", fg="#ffffff",
+        font=("Consolas", 10), insertbackground="#ffffff"
+    )
+    notas_saida.pack(padx=10, pady=8, fill="both", expand=True)
+
+    def executar_rel_notas():
+        try:
+            caminho_vista = entry_notas_vista.get().strip()
+            caminho_prazo = entry_notas_prazo.get().strip()
+
+            if not caminho_vista and not caminho_prazo:
+                messagebox.showwarning("Aviso", "Selecione pelo menos um PDF (à vista ou a prazo).")
+                return
+
+            # --- Leitura usando a MESMA lógica do 'Livro x Relatórios' ---
+            docs_vista = extrair_notas(caminho_vista) if caminho_vista else {}
+            docs_prazo = extrair_prazo(caminho_prazo) if caminho_prazo else {}
+
+            # Totais
+            total_vista = sum(parse_valor(meta.get("valor")) for meta in docs_vista.values())
+            total_prazo = sum(parse_valor(meta.get("valor")) for meta in docs_prazo.values())
+            total_geral = total_vista + total_prazo
+
+            # Contagens
+            qtd_vista = len(docs_vista)
+            qtd_prazo = len(docs_prazo)
+
+            # GoodCard (à vista) – cond inicia com 'GOOD'
+            notas_good = []
+            for key, meta in (docs_vista or {}).items():
+                cond = (meta.get("cond") or "")
+                if isinstance(key, tuple) and cond and cond.upper().startswith("GOOD"):
+                    serie, numero = key[:2]
+                    valor = parse_valor(meta.get("valor"))
+                    notas_good.append((str(serie), str(numero), float(valor)))
+
+            # Resumo por dia (à vista) – se 'data' vier no relatório
+            por_dia = {}
+            for key, meta in (docs_vista or {}).items():
+                data = meta.get("data")
+                if not data:
+                    continue
+                # normaliza para dd/mm
+                try:
+                    d = pd.to_datetime(str(data), dayfirst=True).strftime('%d/%m')
+                except Exception:
+                    continue
+                por_dia[d] = por_dia.get(d, 0.0) + parse_valor(meta.get("valor"))
+
+            # ---- Saída ----
+            notas_saida.delete("1.0", tk.END)
+            notas_saida.insert(tk.END, "=== RESUMO DO RELATÓRIO DE NOTAS ===\n\n")
+            notas_saida.insert(tk.END, f"Total Notas à Vista : {_fmt(total_vista)}\n")
+            notas_saida.insert(tk.END, f"Total Notas a Prazo: {_fmt(total_prazo)}\n")
+            notas_saida.insert(tk.END, f"Total Geral        : {_fmt(total_geral)}\n\n")
+
+            notas_saida.insert(tk.END, f"Qtd. de Notas à Vista : {qtd_vista}\n")
+            notas_saida.insert(tk.END, f"Qtd. de Notas a Prazo : {qtd_prazo}\n\n")
+
+            notas_saida.insert(tk.END, "=== Notas GoodCard (à vista) ===\n")
+            if notas_good:
+                for (serie, numero, valor) in sorted(notas_good, key=lambda x: (x[0], int(re.sub(r'\\D','', x[1]) or 0))):
+                    notas_saida.insert(tk.END, f" Série {serie} - Número {numero} - Valor: {_fmt(valor)}\n")
+            else:
+                notas_saida.insert(tk.END, " Nenhuma nota com COND.=GOOD encontrada.\n")
+            notas_saida.insert(tk.END, "\n")
+
+            if por_dia:
+                notas_saida.insert(tk.END, "=== Totais por Dia (Notas à Vista) ===\n")
+                for dia in sorted(por_dia.keys(), key=lambda d: datetime.strptime(d, "%d/%m")):
+                    notas_saida.insert(tk.END, f" Dia {dia}: {_fmt(por_dia[dia])}\n")
+                notas_saida.insert(tk.END, "\n")
+
+        except Exception as e:
+            messagebox.showerror("Erro", f"Falha ao resumir Relatórios de Notas:\n{e}")
+
+    tk.Button(
+        rel_btns, text="Analisar", command=executar_rel_notas,
+        font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
+        activebackground="#444444", activeforeground="#00bfff",
+        relief="flat", bd=0, padx=10, pady=6
+    ).grid(row=0, column=0, padx=5)
+
+    tk.Button(
+        rel_btns, text="Limpar", command=lambda: notas_saida.delete("1.0", tk.END),
+        font=("Segoe UI", 10), bg="#8b0000", fg="#ffffff",
+        activebackground="#E10000", activeforeground="#ffffff",
+        relief="flat", bd=0, padx=10, pady=6
+    ).grid(row=0, column=1, padx=5)
+
+    # ============================
+    # Estado compartilhado (aba 1)
+    # ============================
+    memo_state = {
+        "ok": False,
+        "total_cupom": 0.0,     # NFCE (Cupom)
+        "total_nota": 0.0,      # NFS (Nota)
+        "total_geral_vendas": 0.0,
+        "vendas_por_forma": {}, # Cupom/Nota/Total por forma
+        "devolucoes_memo": {},
+        "devol_memo_dinheiro": 0.0,
+        "devol_memo_cartao": 0.0,
+        "recebimentos": {},     # ANTECIPADOS / DUPLICATAS / DEPÓSITO
+        "coligadas_memo": 0.0,
+    }
+
+    # ============================
+    # Utilitário de formato
+    # ============================
+    def _fmt(v):
+        try:
+            return (f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        except Exception:
+            return "R$ 0,00"
+
+    # ============================
+    # Aba 1 — Executar Memorando (mantém sua lógica)
+    # ============================
+    def executar_memorando(
         _extrair_tabelas=extrair_tabelas,
         _preparar_dados=preparar_dados,
         _calcular_vendas=calcular_vendas,
         _calcular_recebimentos_detalhados=calcular_recebimentos_detalhados,
         _calcular_saidas_diversas=calcular_saidas_diversas,
         _calcular_devolucoes=calcular_devolucoes_e_sucata_entradas_ordenado,
-        _calcular_remessas=calcular_remessas
+        _calcular_remessas=calcular_remessas,
     ):
-        pdf_path = entry_arquivo.get().strip()
+        pdf_path = entry_pdf.get().strip()
         if not pdf_path:
-            messagebox.showwarning("Aviso", "Selecione o arquivo PDF antes de executar.")
+            messagebox.showwarning("Aviso", "Selecione o arquivo PDF do memorando.")
+            return
+
+        # Loja/Data
+        loja_txt = entry_loja.get().strip()
+        data_txt = entry_data.get().strip()
+        if (not loja_txt or not data_txt) and pdf_path:
+            try:
+                loja_auto, data_auto = extrair_cabecalho_memorando(pdf_path)
+                if not loja_txt and loja_auto: loja_txt = loja_auto
+                if not data_txt and data_auto: data_txt = data_auto
+            except Exception as _e:
+                print("WARN header:", _e)
+        if not loja_txt or not data_txt:
+            messagebox.showwarning("Campos", "Informe Loja e Data (dd/mm/aaaa).")
             return
 
         try:
             df_raw = _extrair_tabelas(pdf_path)
-            df_clean = _preparar_dados(df_raw)
+            df = _preparar_dados(df_raw)
+            
+            # --- [NOVO] Remessa de Dinheiro -> Supabase (mesma lógica do backup) ---
+            try:
+                # 1) Loja/Data a partir dos campos (fallback: cabeçalho do PDF)
+                loja_txt = entry_loja.get().strip()
+                data_txt = entry_data.get().strip()
+                if (not loja_txt or not data_txt) and pdf_path:
+                    try:
+                        loja_auto, data_auto = extrair_cabecalho_memorando(pdf_path)
+                        if not loja_txt and loja_auto:
+                            loja_txt = loja_auto
+                        if not data_txt and data_auto:
+                            data_txt = data_auto
+                    except Exception as _e:
+                        print("WARN header (fallback loja/data):", _e)
 
-            # ---- cálculos principais ----
-            resultados_vendas, total_cupom, total_nota, total_geral_vendas = _calcular_vendas(df_clean)
-            resultados_receb, total_geral_receb = _calcular_recebimentos_detalhados(df_clean)
-            resultados_saidas, total_geral_saidas = _calcular_saidas_diversas(df_clean)
-            resultados_devol_sucata_entradas, _ = _calcular_devolucoes(df_clean)
-            resultados_remessas = _calcular_remessas(
-                df_clean,
-                resultados_vendas,
-                resultados_receb,
-                resultados_saidas
-            )
+                # Se ainda faltou algo, não interrompe o fluxo; só evita o upsert
+                if loja_txt and data_txt:
+                    # 2) Valor da remessa de dinheiro: soma ENTRADA onde descrição contém "REMESSA DE DINHEIRO"
+                    desc = df["DESCRIÇÃO"].astype(str).str.upper().str.strip()
+                    entrada = pd.to_numeric(df["ENTRADA"], errors="coerce").fillna(0.0)
+                    valor_remessa_dinheiro = float(
+                        entrada[desc.str.contains("REMESSA DE DINHEIRO", na=False)].sum()
+                    )
 
-            # =====================================================================
-            #              AJUSTE QUE VOCÊ PEDIU (INJEÇÃO DIRETA)
-            # =====================================================================
+                    # 3) Upsert no Supabase (public.memorandos), PK: (data, loja)
+                    try:
+                        data_iso = _to_iso(data_txt)  # 'YYYY-MM-DD' (igual ao backup)
+                        payload = {
+                            "data": data_iso,
+                            "loja": str(loja_txt).strip(),
+                            "valor_remessa_dinheiro": int(round(valor_remessa_dinheiro)),
+                            "fonte": "prisma",
+                        }
+                        (
+                            supabase
+                            .schema("public")
+                            .table("memorandos")
+                            .upsert(payload, on_conflict="data,loja")
+                            .execute()
+                        )
+                        print("[MEMO] Upsert OK:", payload)
+                    except Exception as e:
+                        # Não bloqueia a análise; só loga o alerta
+                        print("[WARN] Falha no upsert do memorando:", e)
+            except Exception as e:
+                print("[WARN] Remessa Dinheiro (pré-cálculo):", e)
+            # --- [FIM NOVO] ---
+
+
+            vendas, total_cupom, total_nota, total_geral_vendas = _calcular_vendas(df)
+            receb, total_geral_receb = _calcular_recebimentos_detalhados(df)
+            saidas, total_geral_saidas = _calcular_saidas_diversas(df)
+            dev_sucata, _ = _calcular_devolucoes(df)
+            remessas = _calcular_remessas(df, vendas, receb, saidas)
+            
+            valores_prazo = extrair_valores_prazo_texto(pdf_path)
+
+            vendas_prazo_coligada = valores_prazo["vendas_prazo_coligada"]
+            vendas_prazo          = valores_prazo["vendas_prazo"]
+            devolucao_prazo       = valores_prazo["devolucao_prazo"]
+            devolucoes_cliente_prazo = valores_prazo["devolucoes_cliente_prazo"]
+
+
+            # DEV CARTAO CRED CANC PORTAL a partir do texto
             valor_portal_str = extrair_dev_cartao_canc_portal_texto(pdf_path)
             valor_portal_num = parse_brl_to_float(valor_portal_str) if valor_portal_str else 0.0
-
             if valor_portal_num > 0:
-                resultados_devol_sucata_entradas["DEV CARTAO CRED CANC PORTAL"] = valor_portal_num
-            # =====================================================================
+                dev_sucata["DEV CARTAO CRED CANC PORTAL"] = valor_portal_num
 
         except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao processar o arquivo:\n{e}")
+            messagebox.showerror("Erro", f"Erro ao processar o PDF:\n{e}")
             return
 
-        # limpa a área para impressão do relatório final
-        texto.delete("1.0", tk.END)
-
-        # ================= IMPRESSÃO DO RELATÓRIO =======================
-        texto.insert(tk.END, "=== RELATÓRIO DE VENDAS ===\n")
-        ordem = [
-            "DINHEIRO", "CARTAO CREDITO", "CARTAO DEBITO", "DEVCAR",
-            "CARTÃO", "PIX MAQUINETA", "PIX", "DEPOSITO"
-        ]
+        # Impressão
+        memo_saida.delete("1.0", tk.END)
+        memo_saida.insert(tk.END, "=== RELATÓRIO DE VENDAS ===\n")
+        ordem = ["DINHEIRO", "CARTAO CREDITO", "CARTAO DEBITO", "DEVCAR", "CARTÃO",
+                 "PIX MAQUINETA", "PIX", "DEPOSITO"]
         for forma in ordem:
-            if forma in resultados_vendas:
-                v = resultados_vendas[forma]
-                texto.insert(
+            if forma in vendas:
+                v = vendas[forma]
+                memo_saida.insert(
                     tk.END,
-                    f"{forma}: Cupom = {fmt_money_br(v.get('Cupom',0.0))} "
-                    f"Nota = {fmt_money_br(v.get('Nota',0.0))} "
-                    f"Total = {fmt_money_br(v.get('Total',0.0))}\n"
+                    f"{forma}: Cupom = {_fmt(v.get('Cupom',0.0))} "
+                    f"Nota = {_fmt(v.get('Nota',0.0))} "
+                    f"Total = {_fmt(v.get('Total',0.0))}\n"
                 )
+        memo_saida.insert(tk.END, f"\nTotal Cupom Fiscal: {_fmt(total_cupom)}\n")
+        memo_saida.insert(tk.END, f"Total Nota Fiscal: {_fmt(total_nota)}\n")
+        memo_saida.insert(tk.END, f"Total Geral: {_fmt(total_geral_vendas)}\n\n")
 
-        texto.insert(tk.END, f"\nTotal Cupom Fiscal: {fmt_money_br(total_cupom)}\n")
-        texto.insert(tk.END, f"Total Nota Fiscal: {fmt_money_br(total_nota)}\n")
-        texto.insert(tk.END, f"Total Geral: {fmt_money_br(total_geral_vendas)}\n\n")
+        memo_saida.insert(tk.END, "=== RELATÓRIO DETALHADO DE RECEBIMENTOS ===\n")
+        for k, val in receb.get("ANTECIPADOS", {}).items():
+            memo_saida.insert(tk.END, f"Antecipado {k}: {_fmt(val)}\n")
+        for k, val in receb.get("DUPLICATAS", {}).items():
+            memo_saida.insert(tk.END, f"Duplicata {k}: {_fmt(val)}\n")
+        memo_saida.insert(tk.END, f"Abatimento: {_fmt(receb.get('ABATIMENTO', 0.0))}\n")
+        memo_saida.insert(tk.END, f"Depósito: {_fmt(receb.get('DEPÓSITO', 0.0))}\n\n")
 
-        texto.insert(tk.END, "=== RELATÓRIO DETALHADO DE RECEBIMENTOS ===\n")
-        for forma, valor in resultados_receb.get("ANTECIPADOS", {}).items():
-            texto.insert(tk.END, f"Antecipado {forma}: {fmt_money_br(valor)}\n")
-        for forma, valor in resultados_receb.get("DUPLICATAS", {}).items():
-            texto.insert(tk.END, f"Duplicata {forma}: {fmt_money_br(valor)}\n")
-        texto.insert(tk.END, f"Abatimento: {fmt_money_br(resultados_receb.get('ABATIMENTO',0.0))}\n")
-        texto.insert(tk.END, f"Depósito: {fmt_money_br(resultados_receb.get('DEPÓSITO',0.0))}\n")
-        texto.insert(tk.END, f"\nTOTAL GERAL DE RECEBIMENTOS: {fmt_money_br(total_geral_receb)}\n\n")
-
-        texto.insert(tk.END, "=== RELATÓRIO DE SAÍDAS DIVERSAS ===\n")
-        for chave, valor in resultados_saidas.items():
-            texto.insert(tk.END, f"{chave}: {fmt_money_br(valor)}\n")
-        texto.insert(tk.END, f"\nTOTAL GERAL DE SAÍDAS DIVERSAS: {fmt_money_br(total_geral_saidas)}\n\n")
+        memo_saida.insert(tk.END, "=== RELATÓRIO DE SAÍDAS DIVERSAS ===\n")
+        for k, val in saidas.items():
+            memo_saida.insert(tk.END, f"{k}: {_fmt(val)}\n")
+        memo_saida.insert(tk.END, "\n")
 
         total_consolidado = total_geral_vendas + total_geral_receb + total_geral_saidas
-        texto.insert(tk.END, "=== TOTAL CONSOLIDADO ===\n")
-        texto.insert(tk.END, f"Total Geral de Vendas: {fmt_money_br(total_geral_vendas)}\n")
-        texto.insert(tk.END, f"Total Geral de Recebimentos: {fmt_money_br(total_geral_receb)}\n")
-        texto.insert(tk.END, f"Total Geral de Saídas Diversas: {fmt_money_br(total_geral_saidas)}\n")
-        texto.insert(tk.END, f"\nTOTAL FINAL (somatório): {fmt_money_br(total_consolidado)}\n\n")
+        memo_saida.insert(tk.END, "=== TOTAL CONSOLIDADO ===\n")
+        memo_saida.insert(tk.END, f"Total Geral de Vendas: {_fmt(total_geral_vendas)}\n")
+        memo_saida.insert(tk.END, f"Total Geral de Recebimentos: {_fmt(total_geral_receb)}\n")
+        memo_saida.insert(tk.END, f"Total Geral de Saídas Diversas: {_fmt(total_geral_saidas)}\n")
+        memo_saida.insert(tk.END, f"\nTOTAL FINAL (somatório): {_fmt(total_consolidado)}\n\n")
 
-        texto.insert(tk.END, "=== DEVOLUÇÕES, SUCATA E DESPESAS===\n\n")
-        for chave, valor in resultados_devol_sucata_entradas.items():
-            texto.insert(tk.END, f"{chave}: {fmt_money_br(valor)}\n")
-        texto.insert(tk.END, "\n")
+        memo_saida.insert(tk.END, "=== DEVOLUÇÕES, SUCATA E DESPESAS===\n\n")
+        for k, val in dev_sucata.items():
+            memo_saida.insert(tk.END, f"{k}: {_fmt(val)}\n")
+        memo_saida.insert(tk.END, "\n")
 
-        texto.insert(tk.END, "=== ANÁLISE DE REMESSAS ===\n\n")
-        for chave, valores in resultados_remessas.items():
-            rem = valores.get('Remessa', 0.0)
-            sai = valores.get('Saídas', 0.0)
-            dif = valores.get('Diferença', 0.0)
-            texto.insert(
+        
+        memo_saida.insert(tk.END, "\n=== VENDAS / DEVOLUÇÕES A PRAZO\n\n")
+        memo_saida.insert(tk.END, f"Vendas a Prazo Coligada: { _fmt(vendas_prazo_coligada) }\n")
+        memo_saida.insert(tk.END, f"Vendas a Prazo:           { _fmt(vendas_prazo) }\n")
+        memo_saida.insert(tk.END, f"Devolução a Prazo:        { _fmt(devolucao_prazo) }\n")
+        memo_saida.insert(tk.END, f"Devoluções Cliente Prazo: { _fmt(devolucoes_cliente_prazo) }\n\n")
+
+
+        memo_saida.insert(tk.END, "=== ANÁLISE DE REMESSAS ===\n\n")
+        for k, vals in remessas.items():
+            memo_saida.insert(
                 tk.END,
-                f"{chave}: Remessa = {fmt_money_br(rem)} "
-                f"Saídas = {fmt_money_br(sai)} "
-                f"Diferença = {fmt_money_br(dif)}\n"
+                f"{k}: Remessa = {_fmt(vals.get('Remessa',0.0))} "
+                f"Saídas = {_fmt(vals.get('Saídas',0.0))} "
+                f"Diferença = {_fmt(vals.get('Diferença',0.0))}\n"
             )
 
+        # ====== SALVAR NO ESTADO PARA A CONCILIAÇÃO ======
+        memo_state["ok"] = True
+        memo_state["total_cupom"] = float(total_cupom)
+        memo_state["total_nota"] = float(total_nota)
+        memo_state["total_geral_vendas"] = float(total_geral_vendas)
+        memo_state["vendas_por_forma"] = vendas
+
+        def _get_memo_val(chave): 
+            return float(dev_sucata.get(chave, 0.0))
+
+        memo_state["devolucoes_memo"] = dev_sucata.copy()
+        memo_state["devol_memo_dinheiro"] = (
+            _get_memo_val("DEVOLUCOES A VISTA") +
+            _get_memo_val("DEVOLUCOES DO CLIENTE A VISTA") +
+            _get_memo_val("DEVOLUCAO ACERTO DE ESTOQUE")
+        )
+        memo_state["devol_memo_cartao"] = (
+            _get_memo_val("DEVOLUCOES CARTAO CREDITO") +
+            _get_memo_val("DEVOLUCOES DO CLIENTE CARTAO") +
+            _get_memo_val("DEV CARTAO CRED CANC PORTAL")
+        )
+
+        memo_state["recebimentos"] = receb
+        soma_antecip = sum(float(v or 0.0) for v in (receb.get("ANTECIPADOS", {}) or {}).values())
+        soma_dupl   = sum(float(v or 0.0) for v in (receb.get("DUPLICATAS", {}) or {}).values())
+        soma_dep_rcb= float(receb.get("DEPÓSITO", 0.0) or 0.0)
+        memo_state["coligadas_memo"] = float(soma_antecip + soma_dupl + soma_dep_rcb)
+
+        memo_state["vendas_prazo_coligada"] = vendas_prazo_coligada
+        memo_state["vendas_prazo"] = vendas_prazo
+        memo_state["devolucao_prazo"] = devolucao_prazo
+        memo_state["devolucoes_cliente_prazo"] = devolucoes_cliente_prazo
+
+
+    # Botões da Aba 1
     tk.Button(
-        btn_frame,
-        text="Executar",
-        command=executar,
-        font=("Segoe UI", 10),
-        bg="#2e2e2e",
-        fg="#ffffff",
-        activebackground="#444444",
-        activeforeground="#00bfff",
-        relief="flat",
-        bd=0,
-        padx=10,
-        pady=5
+        memo_btns, text="Executar", command=executar_memorando,
+        font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
+        activebackground="#444444", activeforeground="#00bfff",
+        relief="flat", bd=0, padx=10, pady=5
     ).grid(row=0, column=0, padx=5)
-
     tk.Button(
-        btn_frame,
-        text="Voltar",
-        command=ao_fechar,
-        font=("Segoe UI", 10),
-        bg="#2e2e2e",
-        fg="#ffffff",
-        activebackground="#444444",
-        activeforeground="#00bfff",
-        relief="flat",
-        bd=0,
-        padx=10,
-        pady=5
+        memo_btns, text="Limpar", command=lambda: memo_saida.delete("1.0", tk.END),
+        font=("Segoe UI", 10), bg="#8b0000", fg="#ffffff",
+        activebackground="#E10000", activeforeground="#ffffff",
+        relief="flat", bd=0, padx=10, pady=5
     ).grid(row=0, column=1, padx=5)
-
     tk.Button(
-        btn_frame,
-        text="Limpar Resultados",
-        command=lambda: texto.delete("1.0", tk.END),
-        font=("Segoe UI", 10),
-        bg="#8b0000",
-        fg="#ffffff",
-        activebackground="#E10000",
-        activeforeground="#ffffff",
-        relief="flat",
-        bd=0,
-        padx=10,
-        pady=5
+        memo_btns, text="Voltar", command=ao_fechar,
+        font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
+        activebackground="#444444", activeforeground="#00bfff",
+        relief="flat", bd=0, padx=10, pady=5
     ).grid(row=0, column=2, padx=5)
 
-    texto = scrolledtext.ScrolledText(
-        janela,
-        width=110,
-        height=32,
-        bg="#2e2e2e",
-        fg="#ffffff",
-        font=("Consolas", 10),
-        insertbackground="#ffffff"
-    )
-    texto.pack(padx=10, pady=10, fill="both", expand=True)
+    # ============================
+    # Conciliação — Helpers
+    # ============================
 
+    # Extrai conta de partida (ROBUSTO)
+    def _extrair_conta_partida_texto(texto_col7) -> int | None:
+        s = "" if texto_col7 is None else str(texto_col7)
+        m = re.search(r'^\s*\d+\s*-\s*(\d{1,4})\b', s)
+        if m:
+            try: return int(m.group(1))
+            except: pass
+        m = re.search(r'\((\d{1,4})\)', s)
+        if m:
+            try: return int(m.group(1))
+            except: pass
+        m = re.search(r'(?:CONTA|PARTIDA)\D*(\d{1,4})', s, flags=re.I)
+        if m:
+            try: return int(m.group(1))
+            except: pass
+        todos = re.findall(r'(\d{1,4})', s)
+        if todos:
+            try: return int(todos[-1])
+            except: pass
+        return None
+
+    # === NOVO: devoluções por contabilidade (bloco 446, DÉBITO), só Dinheiro/Cartão
+    def _sumarizar_devolucoes_contab_det(caminho_excel: str):
+        res = {"dinheiro": 0.0, "cartao": 0.0}
+        if not caminho_excel:
+            return res
+        try:
+            df = pd.read_excel(caminho_excel, header=None, engine='xlrd')
+            COL_HIST, COL_CONTA, COL_DEBITO = 5, 7, 8
+            conta_devol = 446
+            formas_pagamento = { 6: "Dinheiro", 2157: "Cartão", 1253: "Cartão", 1179: "Cartão" }
+            bloco_devol = False
+            for _, row in df.iterrows():
+                texto_bloco = (("" if pd.isna(row[COL_CONTA]) else str(row[COL_CONTA])) + " " +
+                               ("" if pd.isna(row[COL_HIST]) else str(row[COL_HIST]))).upper()
+                if "446" in texto_bloco or "DEVOLU" in texto_bloco:
+                    bloco_devol = True
+                    continue
+                if not bloco_devol:
+                    continue
+                cp = "" if pd.isna(row[COL_CONTA]) else str(row[COL_CONTA]).upper()
+                if "TOTAL DEB" in cp or "TOTAL CRED" in cp:
+                    continue
+                valor = pd.to_numeric(row[COL_DEBITO], errors="coerce")
+                if pd.isna(valor) or float(valor) == 0.0:
+                    continue
+                conta_partida = _extrair_conta_partida_texto(row[COL_CONTA])
+                forma = formas_pagamento.get(conta_partida, None)
+                if forma == "Dinheiro":
+                    res["dinheiro"] += float(valor)
+                elif forma == "Cartão":
+                    res["cartao"] += float(valor)
+            return res
+        except Exception as e:
+            print("Erro devolução contab:", e)
+            return res
+
+    # === NOVO: cálculo de Notas (à vista / a prazo) a partir do Excel
+    #           usando a MESMA LÓGICA da conciliação (DOC<=100 Cupom; DOC>100 Nota).
+    def calcular_notas_excel_prisma(caminho_excel: str):
+        if not caminho_excel:
+            return 0.0, 0.0, 0.0
+
+        df = pd.read_excel(caminho_excel, header=None, engine='xlrd')
+        COL_DOC, COL_HIST, COL_CONTA, COL_CRED = 4, 5, 7, 9
+        CONTAS_VISTA, CONTAS_PRAZO, CONTA_DEVOL = {417,419,421,422}, {418,420,430}, 446
+
+        def extrair_num_bloco(texto):
+            if not isinstance(texto, str):
+                texto = "" if pd.isna(texto) else str(texto)
+            t = texto.upper()
+            for padrao in [r'\((\d{3,4})\)', r'CONTA\s*(\d{3,4})', r'\b(\d{3,4})\s*-\s*']:
+                m = re.search(padrao, t)
+                if m:
+                    try: return int(m.group(1))
+                    except: pass
+            return None
+
+        def classificar_cupom_nota(doc_raw, conta_partida=None):
+            # >>> FORÇAR 1179/1253 COMO NOTA FISCAL <<<
+            if conta_partida in (1253, 1179):
+                return "Nota Fiscal"
+            # regra numérica padrão
+            toks = re.findall(r'\d+', str(doc_raw))
+            if toks:
+                try:
+                    num = int(toks[-1])
+                    return "Cupom Fiscal" if 1 <= num <= 100 else "Nota Fiscal"
+                except:
+                    pass
+            return None
+
+        bloco_atual, conta_bloco_atual = None, None
+        tot_vista, tot_prazo = 0.0, 0.0
+
+        for _, row in df.iterrows():
+            texto_bloco = (("" if pd.isna(row[COL_CONTA]) else str(row[COL_CONTA])) + " " +
+                           ("" if pd.isna(row[COL_HIST]) else str(row[COL_HIST]))).upper()
+            if any(x in texto_bloco for x in ["VENDA", "DEVOLU", "CONTA "]):
+                nb = extrair_num_bloco(texto_bloco)
+                if nb in (CONTAS_VISTA | CONTAS_PRAZO | {CONTA_DEVOL}):
+                    bloco_atual, conta_bloco_atual = texto_bloco.strip(), nb
+                    continue
+            if conta_bloco_atual is None:
+                continue
+            cp_txt = "" if pd.isna(row[COL_CONTA]) else str(row[COL_CONTA]).upper()
+            if "TOTAL DEB" in cp_txt or "TOTAL CRED" in cp_txt:
+                continue
+            if conta_bloco_atual == CONTA_DEVOL:
+                continue
+
+            valor = pd.to_numeric(row[COL_CRED], errors="coerce")
+            if pd.isna(valor) or float(valor) == 0.0:
+                continue
+            valor = float(valor)
+
+            conta_partida = _extrair_conta_partida_texto(row[COL_CONTA])  # sua helper já existente
+            tipo_doc = classificar_cupom_nota(row[COL_DOC], conta_partida)
+
+            if tipo_doc != "Nota Fiscal":
+                continue
+
+            if conta_bloco_atual in CONTAS_VISTA:
+                tot_vista += valor
+            elif conta_bloco_atual in CONTAS_PRAZO:
+                tot_prazo += valor
+
+        return tot_vista, tot_prazo, tot_vista + tot_prazo
+
+
+    def calcular_prazo_contab(caminho_excel: str):
+        """
+        Lê o Excel de contabilidade e consolida valores 'a prazo' para comparação com o Memorando:
+        - vendas_prazo_coligada (CRED)  -> contas de 'prazo' com conta-partida = 1022 (Coligadas)
+        - vendas_prazo (CRED)           -> contas de 'prazo' com conta-partida = 1698 (Venda a Prazo)
+        - devolucao_prazo (DEB)         -> bloco 446 (Devolução), conta-partida = 1698
+        - devolucoes_cliente_prazo (DEB)-> bloco 446 (Devolução), conta-partida = 1698 e descrição contém 'DEVOLUCOES DO CLIENTE'
+
+        Usa a mesma lógica de blocos do app:
+        - CONTAS_VISTA = {417, 419, 421, 422}
+        - CONTAS_PRAZO = {418, 420, 430}
+        - CONTA_DEVOL  = 446
+
+        Retorna dict com floats.
+        """
+        resultados = {
+            "vendas_prazo_coligada": 0.0,
+            "vendas_prazo": 0.0,
+            "devolucao_prazo": 0.0,
+            "devolucoes_cliente_prazo": 0.0,
+        }
+        if not caminho_excel:
+            return resultados
+
+        try:
+            # Usa o mesmo padrão de leitura já utilizado em outras funções
+            try:
+                df = pd.read_excel(caminho_excel, header=None, engine='xlrd')
+            except Exception:
+                df = pd.read_excel(caminho_excel, header=None)
+
+            # Colunas padrão do seu layout
+            COL_DOC, COL_HIST, COL_CONTA, COL_DEB, COL_CRED = 4, 5, 7, 8, 9
+
+            # Conjuntos de contas por bloco (conforme sua lógica)
+            CONTAS_VISTA = {417, 419, 421, 422}
+            CONTAS_PRAZO = {418, 420, 430}
+            CONTA_DEVOL  = 446
+
+            # Contas/formas (mesma convenção da aplicação)
+            # 1698: "Venda a Prazo"; 1022: "Coligadas"
+            CONTA_PARTIDA_PRAZO = 1698
+            CONTA_PARTIDA_COLIG = 1022
+
+            # ---- Helpers internos (reuso dos seus padrões) ----
+            def _extrair_conta_partida_texto(texto_col7) -> int | None:
+                s = "" if texto_col7 is None else str(texto_col7)
+                m = re.search(r'^\s*\d+\s*-\s*(\d{1,4})\b', s)
+                if m:
+                    try: return int(m.group(1))
+                    except: pass
+                m = re.search(r'\((\d{1,4})\)', s)
+                if m:
+                    try: return int(m.group(1))
+                    except: pass
+                m = re.search(r'(?:CONTA|PARTIDA)\D*(\d{1,4})', s, flags=re.I)
+                if m:
+                    try: return int(m.group(1))
+                    except: pass
+                todos = re.findall(r'(\d{1,4})', s)
+                if todos:
+                    try: return int(todos[-1])
+                    except: pass
+                return None
+
+            def _extrair_num_bloco(texto):
+                t = "" if pd.isna(texto) else str(texto)
+                u = t.upper()
+                for padrao in [r'\((\d{3,4})\)', r'CONTA\s*(\d{3,4})', r'\b(\d{3,4})\s*-\s*']:
+                    m = re.search(padrao, u)
+                    if m:
+                        try: return int(m.group(1))
+                        except: pass
+                return None
+
+            # ---- Varredura seguindo a sua lógica de blocos ----
+            bloco_atual = None  # número da conta do bloco (ex.: 418, 420, 430, 446)
+            for _, row in df.iterrows():
+                # Detecta início/troca de bloco pelo cabeçalho da linha (col 7 + col 5)
+                texto_bloco = (
+                    ("" if pd.isna(row[COL_CONTA]) else str(row[COL_CONTA])) + " " +
+                    ("" if pd.isna(row[COL_HIST]) else str(row[COL_HIST]))
+                ).upper()
+
+                if any(x in texto_bloco for x in ["VENDA", "DEVOLU", "CONTA "]):
+                    nb = _extrair_num_bloco(texto_bloco)
+                    if nb in (CONTAS_VISTA | CONTAS_PRAZO | {CONTA_DEVOL}):
+                        bloco_atual = nb
+                        continue
+
+                if bloco_atual is None:
+                    continue
+
+                # Ignora somatórios
+                cp_txt = "" if pd.isna(row[COL_CONTA]) else str(row[COL_CONTA]).upper()
+                if "TOTAL DEB" in cp_txt or "TOTAL CRED" in cp_txt:
+                    continue
+
+                # Valores
+                valor_deb = pd.to_numeric(row[COL_DEB], errors="coerce")
+                valor_cred = pd.to_numeric(row[COL_CRED], errors="coerce")
+                if (pd.isna(valor_deb) or float(valor_deb) == 0.0) and (pd.isna(valor_cred) or float(valor_cred) == 0.0):
+                    continue
+
+                conta_partida = _extrair_conta_partida_texto(row[COL_CONTA])
+                desc_hist = "" if pd.isna(row[COL_HIST]) else str(row[COL_HIST]).upper()
+
+                # ---- Regras ----
+                # 1) VENDAS A PRAZO COLIGADA: blocos de PRAZO (418/420/430), somar CRED, conta-partida = 1022
+                if bloco_atual in CONTAS_PRAZO and not pd.isna(valor_cred) and float(valor_cred) != 0.0:
+                    if conta_partida == CONTA_PARTIDA_COLIG:
+                        resultados["vendas_prazo_coligada"] += float(valor_cred)
+
+                    # 2) VENDAS A PRAZO: blocos de PRAZO (418/420/430), somar CRED, conta-partida = 1698
+                    if conta_partida == CONTA_PARTIDA_PRAZO:
+                        resultados["vendas_prazo"] += float(valor_cred)
+
+                # 3) DEVOLUCAO A PRAZO: bloco 446, somar DEB, conta-partida = 1698
+                if bloco_atual == CONTA_DEVOL and not pd.isna(valor_deb) and float(valor_deb) != 0.0:
+                    if conta_partida == CONTA_PARTIDA_PRAZO:
+                        resultados["devolucao_prazo"] += float(valor_deb)
+
+                        # 4) DEVOLUCOES DO CLIENTE A PRAZO: mesmo critério + descrição contendo 'DEVOLUCOES DO CLIENTE'
+                        if "DEVOLUCOES DO CLIENTE" in desc_hist:
+                            resultados["devolucoes_cliente_prazo"] += float(valor_deb)
+
+            return resultados
+
+        except Exception as e:
+            print("Erro em calcular_prazo_contab:", e)
+            return resultados
+  
+
+    # Conciliação — sumarizador básico (mantido; mas vamos filtrar formas na exibição)
+    def _sumarizar_contab_por_forma_e_tipo_basico(caminho_excel: str):
+        """
+        Consolida totais por FORMA e por TIPO (NFCE/NFS) a partir do Razão (Excel).
+
+        Ajustes importantes:
+        - Normaliza a forma "Nota Fiscal Depósito" (1677) -> "Depósito" para alinhar
+            com a chave do Memorando ("DEPOSITO").
+        - Força o TIPO de 1677 como "NFS".
+        - Mantém overrides já existentes (1575, 1022/430/Coligadas, 989/Depósito).
+        - Respeita CFOPS_EXCLUIDOS.
+        """
+        por_forma_total, por_forma_tipo = {}, {}
+        if not caminho_excel:
+            return por_forma_total, por_forma_tipo
+
+        try:
+            # Robustez: tenta xlrd (xls); se falhar, usa engine padrão
+            try:
+                df = pd.read_excel(caminho_excel, header=None, engine="xlrd")
+            except Exception:
+                df = pd.read_excel(caminho_excel, header=None)
+
+            # Colunas (layout já utilizado no app)
+            COL_DOC  = 4
+            COL_HIST = 5
+            COL_CONTA = 7
+            COL_CRED = 9
+
+            # Mapa de formas (mantém o seu original)
+            formas_pagamento = {
+                6: "Dinheiro",
+                11: "Pix QrCode",
+                2074: "Pix Maquineta",
+                1698: "Venda a Prazo",
+                1022: "Coligadas",
+                2157: "Cartão",
+                1253: "GoodCard",
+                1179: "Cartão Link",
+                989: "Depósito",
+                1677: "Nota Fiscal Depósito",  # <— será normalizado para "Depósito"
+                1575: "Transitórias",
+            }
+
+            # Aliases para uniformizar o rótulo das formas no comparativo com o Memorando
+            
+            alias_forma = {
+                "Nota Fiscal Depósito": "Depósito",  # 1677 -> "Depósito" (já existia)
+                "GoodCard": "Cartão",                # 1253 -> CARTÃO
+                "Cartão Link": "Cartão",             # 1179 -> CARTÃO
+            }
+
+
+            for _, row in df.iterrows():
+                # Valor: coluna 9 (Crédito) no seu layout de vendas/recebimentos
+                valor = pd.to_numeric(row[COL_CRED], errors="coerce")
+                if pd.isna(valor) or float(valor) == 0.0:
+                    continue
+
+                # Texto da linha inteiro (para CFOPs e heurísticas)
+                linha_txt = " ".join(str(x) for x in row.values).upper()
+
+                # Ignora CFOPs excluídos
+                if any(cfop in linha_txt for cfop in CFOPS_EXCLUIDOS):
+                    continue
+
+                doc_raw  = row[COL_DOC]
+                conta_txt = row[COL_CONTA]
+
+                # Extrai número da conta-partida da coluna 7 (robusto)
+                conta_num = _extrair_conta_partida_texto(conta_txt)
+
+                # === REGRAS DE TIPO (NFCE/NFS) ===
+
+                # Regra especial 1575: usa padrão "numero - xxx -"
+                def _nf_por_1575(doc_str):
+                    try:
+                        s = str(doc_str)
+                        m2 = re.search(r'(\d+)\s*-\s*(\d{3})\s*-?', s)
+                        if not m2:
+                            return None
+                        codigo = int(m2.group(2))
+                        return "NFCE" if codigo < 25 else "NFS"
+                    except Exception:
+                        return None
+
+                texto_val = unidecode(str(conta_txt) if conta_txt is not None else "").upper()
+
+                if conta_num == 1575:
+                    tipo = _nf_por_1575(doc_raw) or "NFS"
+                elif "COLIGADAS" in linha_txt or (conta_num in (1022, 430)):
+                    tipo = "NFS"
+                elif conta_num == 989 or "DEPOSITO" in texto_val:
+                    # Depósitos avulsos costumam ser NFCE no seu fluxo original
+                    tipo = "NFCE"
+                else:
+                    # Heurística padrão por DOC (último número; 1..100 => NFCE, senão NFS)
+                    toks = re.findall(r'\d+', str(doc_raw))
+                    if toks:
+                        try:
+                            nro = int(toks[-1])
+                            tipo = "NFCE" if 1 <= nro <= 100 else "NFS"
+                        except Exception:
+                            tipo = "NFS"
+                    else:
+                        tipo = "NFS"
+
+                # === OVERRIDE ESPECÍFICO: 1677 É SEMPRE NFS ===
+                if conta_num == 1677:
+                    tipo = "NFS"
+
+                # Forma base pela conta-partida
+                forma_base = formas_pagamento.get(conta_num, "Outros")
+                # Normalização de rótulo para alinhar com o memorando
+                forma_norm = alias_forma.get(forma_base, forma_base)
+
+                # Acumula
+                por_forma_total[forma_norm] = por_forma_total.get(forma_norm, 0.0) + float(valor)
+                por_forma_tipo.setdefault(forma_norm, {"NFCE": 0.0, "NFS": 0.0})
+                por_forma_tipo[forma_norm][tipo] = por_forma_tipo[forma_norm].get(tipo, 0.0) + float(valor)
+
+            return por_forma_total, por_forma_tipo
+
+        except Exception as e:
+            try:
+                messagebox.showerror("Erro", f"Falha ao ler a contabilidade (básico):\n{e}")
+            except Exception:
+                print("Falha ao ler a contabilidade (básico):", e)
+            return {}, {}
+
+    # ============================
+    # Conciliação — Execução
+    # ============================
+
+    def executar_conciliacao():
+        conf_saida.delete("1.0", tk.END)
+
+        if not memo_state["ok"]:
+            conf_saida.insert(tk.END, "⚠️ Rode primeiro a aba 'Memorando' para gerar a base de comparação.\n\n")
+        
+        caminho_excel = entry_contab.get().strip()
+        if not caminho_excel:
+            conf_saida.insert(tk.END, "ℹ️ Nenhum Excel de contabilidade selecionado. Usando 0,00 para a contabilidade.\n\n")
+
+        # ====================================================
+        # (A) Por FORMA/TIPO – leitura básica
+        # ====================================================
+        por_forma_total_b, por_forma_tipo_b = _sumarizar_contab_por_forma_e_tipo_basico(caminho_excel)
+
+        # --- NFCE ---
+        FORMAS_EXCLUIDAS = {"GoodCard", "Coligadas", "Cartão Link"}
+        c_nfce = 0.0
+        for forma, tipos in por_forma_tipo_b.items():
+            if forma in FORMAS_EXCLUIDAS:
+                continue
+            c_nfce += float(tipos.get("NFCE", 0.0))
+
+        # --- NFS CONTABILIDADE (corrigido) ---
+        n_vista, n_prazo, n_total = calcular_notas_excel_prisma(caminho_excel)
+        c_nfs = n_total
+
+        # --- MEMORANDO ---
+        m_nfce = float(memo_state["total_cupom"])
+        m_nfs = float(memo_state["total_nota"]) + float(memo_state.get("vendas_prazo", 0.0))
+
+        # ====================================================
+        # IMPRIME CABEÇALHO NFCE / NFS
+        # ====================================================
+        conf_saida.insert(tk.END, "==== Contabilidade x Memorando ====\n\n")
+        conf_saida.insert(tk.END, f"Cupons - Contabillidade: {_fmt(c_nfce)}\n")
+        conf_saida.insert(tk.END, f"Cupons - Memorando: {_fmt(m_nfce)}\n")
+        conf_saida.insert(tk.END, f"Variação - Cupons: {_fmt(c_nfce - m_nfce)}\n\n")
+
+        conf_saida.insert(tk.END, f"Notas Fiscais - Contabilidade: {_fmt(c_nfs)}\n")
+        conf_saida.insert(tk.END, f"Notas Fiscais - Memorando: {_fmt(m_nfs)}\n")
+        conf_saida.insert(tk.END, f"Variação - Notas Fiscais: {_fmt(c_nfs - m_nfs)}\n\n")
+
+        total_c = c_nfce + c_nfs
+        total_m = m_nfce + m_nfs
+
+        conf_saida.insert(tk.END, "------------------------------------------------\n")
+        conf_saida.insert(tk.END, f"Total - Contabilidade: { _fmt(total_c) }\n")
+        conf_saida.insert(tk.END, f"Total - Memorando: { _fmt(total_m) }\n")
+        conf_saida.insert(tk.END, f"Variação - Total: { _fmt(total_c - total_m) }\n\n")
+
+        # ====================================================
+        # (B) POR FORMA DE PAGAMENTO
+        # ====================================================
+        conf_saida.insert(tk.END, "\n==== Conciliação por Forma de Pagamento ====\n\n")
+
+        vendas_memo = memo_state.get("vendas_por_forma", {}) or {}
+
+        mapa_formas = [
+            ("Dinheiro", "DINHEIRO"),
+            ("Pix QrCode", "PIX"),
+            ("Pix Maquineta", "PIX MAQUINETA"),
+            ("Depósito", "DEPOSITO"),
+            ("Cartão", "CARTÃO"),
+        ]
+
+        EXCLUIR_FORMAS = {"Transitórias", "Reembolso Manaus"}
+
+        def _memo_total(forma_key_memo):
+            d = vendas_memo.get(forma_key_memo, {})
+            return float(d.get("Total", 0.0))
+
+        for contab_key, memo_key in mapa_formas:
+            if contab_key in EXCLUIR_FORMAS:
+                continue
+            v_cont = float(por_forma_total_b.get(contab_key, 0.0))
+            v_memo = _memo_total(memo_key)
+
+            conf_saida.insert(tk.END, f"{contab_key:>22} (Contab): {_fmt(v_cont)}\n")
+            conf_saida.insert(tk.END, f"{memo_key:>22} (Memorando): {_fmt(v_memo)}\n")
+            conf_saida.insert(tk.END, f"{('Δ ' + contab_key):>22}: {_fmt(v_cont - v_memo)}\n\n")
+
+        # ====================================================
+        # (C) POR TIPO (Cupom / Nota)
+        # ====================================================
+        conf_saida.insert(tk.END, "\n---- Conciliação por Tipo de Pagamento ----\n\n")
+
+        EXCLUIR_POR_TIPO = {
+            "Transitórias", "Reembolso Manaus", "Outros",
+            "Coligadas", "GoodCard", "Cartão Link"
+        }
+
+        for contab_key, memo_key in mapa_formas:
+            if contab_key in EXCLUIR_POR_TIPO:
+                continue
+            
+            tipos = por_forma_tipo_b.get(contab_key, {"NFCE": 0.0, "NFS": 0.0})
+
+            c_nfce_f = float(tipos.get("NFCE", 0.0))
+            c_nfs_f  = float(tipos.get("NFS", 0.0))
+
+            m_cupom = float((vendas_memo.get(memo_key, {}) or {}).get("Cupom", 0.0))
+            m_nota  = float((vendas_memo.get(memo_key, {}) or {}).get("Nota", 0.0))
+
+            if any([c_nfce_f, c_nfs_f, m_cupom, m_nota]):
+                conf_saida.insert(tk.END, f"[{contab_key}]\n")
+                conf_saida.insert(tk.END, f" NFCE (Contab): {_fmt(c_nfce_f)}   | Cupom (Memo): {_fmt(m_cupom)}   | Δ: {_fmt(c_nfce_f - m_cupom)}\n")
+                conf_saida.insert(tk.END, f" NFS (Contab):  {_fmt(c_nfs_f)}   | Nota (Memo):  {_fmt(m_nota)}    | Δ: {_fmt(c_nfs_f - m_nota)}\n\n")
+
+        # ====================================================
+        # (D) DEVOLUÇÕES — DETALHADO (446 / DÉBITO)
+        # ====================================================
+        conf_saida.insert(tk.END, "\n==== Devoluções à Vista ====\n\n")
+
+        devol_contab = {"dinheiro": 0.0, "cartao": 0.0}
+        try:
+            devol_contab = _sumarizar_devolucoes_contab_det(caminho_excel)
+        except:
+            pass
+
+        c_dev_din = float(devol_contab.get("dinheiro", 0.0))
+        c_dev_car = float(devol_contab.get("cartao", 0.0))
+
+        m_dev_din = float(memo_state.get("devol_memo_dinheiro", 0.0))
+        m_dev_car = float(memo_state.get("devol_memo_cartao", 0.0))
+
+        conf_saida.insert(tk.END, f"Devolução (Dinheiro) — Contab: {_fmt(c_dev_din)}\n")
+        conf_saida.insert(tk.END, f"Devolução (Dinheiro) — Memo  : {_fmt(m_dev_din)}\n")
+        conf_saida.insert(tk.END, f"Δ Dinheiro (Devolução): {_fmt(c_dev_din - m_dev_din)}\n\n")
+
+        conf_saida.insert(tk.END, f"Devolução (Cartão) — Contab: {_fmt(c_dev_car)}\n")
+        conf_saida.insert(tk.END, f"Devolução (Cartão) — Memo  : {_fmt(m_dev_car)}\n")
+        conf_saida.insert(tk.END, f"Δ Cartão (Devolução): {_fmt(c_dev_car - m_dev_car)}\n")
+
+        # ====================================================
+        # (E)  NOVA ETAPA — "A PRAZO"
+        # ====================================================
+        conf_saida.insert(tk.END, "\n==== Devoluções e Vendas a Prazo ====\n\n")
+
+        contab_prazo = calcular_prazo_contab(caminho_excel)
+
+        c_vpc = float(contab_prazo.get("vendas_prazo_coligada", 0.0))
+        c_vp  = float(contab_prazo.get("vendas_prazo", 0.0))
+        c_dp  = float(contab_prazo.get("devolucao_prazo", 0.0))
+        c_dcp = float(contab_prazo.get("devolucoes_cliente_prazo", 0.0))
+
+        m_vpc = float(memo_state.get("vendas_prazo_coligada", 0.0))
+        m_vp  = float(memo_state.get("vendas_prazo", 0.0))
+        m_dp  = float(memo_state.get("devolucao_prazo", 0.0))
+        m_dcp = float(memo_state.get("devolucoes_cliente_prazo", 0.0))
+
+        linhas = [
+            ("Vendas a Prazo Coligada", c_vpc, m_vpc),
+            ("Vendas a Prazo",         c_vp,  m_vp),
+            ("Devolução a Prazo",      c_dp,  m_dp),
+            ("Devoluções Cliente Prazo", c_dcp, m_dcp),
+        ]
+
+        for rot, c_val, m_val in linhas:
+            conf_saida.insert(tk.END, f"{rot} — Contab: {_fmt(c_val)}\n")
+            conf_saida.insert(tk.END, f"{rot} — Memo  : {_fmt(m_val)}\n")
+            conf_saida.insert(tk.END, f"Δ {rot}: {_fmt(c_val - m_val)}\n\n")
+
+
+    # Botões da Aba 2
+    tk.Button(
+        conf_btns, text="Conciliar", command=executar_conciliacao,
+        font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
+        activebackground="#444444", activeforeground="#00bfff",
+        relief="flat", bd=0, padx=10, pady=6
+    ).grid(row=0, column=0, padx=5)
+    tk.Button(
+        conf_btns, text="Limpar", command=lambda: conf_saida.delete("1.0", tk.END),
+        font=("Segoe UI", 10), bg="#8b0000", fg="#ffffff",
+        activebackground="#E10000", activeforeground="#ffffff",
+        relief="flat", bd=0, padx=10, pady=6
+    ).grid(row=0, column=1, padx=5)
 
 def iniciar_calculo_dinheiro_remetido():
     def selecionar_arquivo():
         caminho = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
         if caminho:
             entry_arquivo.delete(0, tk.END)
-            entry_arquivo.insert(0, caminho)
-
+            entry_arquivo.insert(0, caminho)            
+            
     def executar():
         try:
             caminho = entry_arquivo.get()
@@ -3139,12 +4418,13 @@ def iniciar_calculo_dinheiro_remetido():
             col_E = to_number_safe(df[COL_E]) 
             col_G = to_number_safe(df[COL_G])  
 
+
             linha_texto = (
-                df.astype(str)
-                .apply(lambda s: " ".join(s.values.tolist()), axis=1)
+                df.apply(lambda s: " ".join("" if pd.isna(v) else str(v) for v in s), axis=1)
                 .str.upper()
                 .str.strip()
             )
+
 
             mask_total_anterior = linha_texto.str.contains(r'\bTOTAL\s+ANTERIOR\b', regex=True, na=False)
             mask_saldo_final   = linha_texto.str.contains(r'\bTOTAL\s+SALDO\s+FINAL\b', regex=True, na=False)
@@ -3165,9 +4445,9 @@ def iniciar_calculo_dinheiro_remetido():
                 total_saldo_final_val = None
 
             padrao_rodape = (
-                r'(^\s)TOTAL\s+ANTERIOR\b'
-                r'|(^\s)TOTAL\s+SALDO\s+FINAL\b'
-                r'|(^\s)TOTAL\s+DEB\s*/\s*CRED\b'
+                r'(?:^\s)TOTAL\s+ANTERIOR\b'
+                r'|(?:^\s)TOTAL\s+SALDO\s+FINAL\b'
+                r'|(?:^\s)TOTAL\s+DEB\s*/\s*CRED\b'
                 r'|^\s*TOTAL\s'
             )
             eh_rodape = linha_texto.str.contains(padrao_rodape, regex=True, na=False) & ~eh_dev_total
@@ -3221,7 +4501,13 @@ def iniciar_calculo_dinheiro_remetido():
             total_periodo = float(por_dia['remetido'].sum()) if not por_dia.empty else 0.0
 
             # --- SAÍDA ---
+            
             saida.delete(1.0, tk.END)
+
+            # >>> SE VOCÊ DECIDIR REUTILIZAR O NÚCLEO (recomendado):
+            # from ... use a função já pronta, com período vindo dos campos (se existirem)
+            por_dia, total_periodo, total_anterior_val, total_saldo_final_val, sucata_total = \
+                calcular_dinheiro_remetido_core(caminho, ini_str, fim_str)
 
             # Cabeçalho do período
             if data_ini or data_fim:
@@ -3243,6 +4529,8 @@ def iniciar_calculo_dinheiro_remetido():
                 else:
                     saida.insert(tk.END, "🔹 TOTAL SALDO FINAL: (não encontrado)\n")
                 saida.insert(tk.END, "\n")
+
+            saida.insert(tk.END, f"🔹 PAGAMENTO DE SUCATA (no período): R$ {fmt_brl(sucata_total)}\n\n")
 
             # Lista por dia
             if por_dia.empty:
@@ -3389,6 +4677,96 @@ def iniciar_conciliacao_pix_qrcode():
         activebackground="#444444", activeforeground="#00bfff",
         relief="flat", bd=0, padx=10, pady=5
     ).grid(row=0, column=0, padx=5)
+
+
+def abrir_submenu_livro_fiscal():
+    global menu_content_area, submenu_conc_frame
+    _clear_menu_content()  # limpa a área central
+    submenu_conc_frame = tk.Frame(menu_content_area, bg="#1e1e1e")
+    submenu_conc_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+    # helper para criar botões estilo principal
+    def mk_btn(parent, text, cmd, danger=False):
+        bg = "#8b0000" if danger else "#2e2e2e"
+        fg = "#ffffff"
+        b = tk.Button(
+            parent, text=text, command=cmd,
+            font=("Segoe UI", 11), bg=bg, fg=fg,
+            activebackground="#444444", activeforeground="#00bfff",
+            relief="flat", bd=0, padx=16, pady=10, cursor="hand2"
+        )
+        # hover
+        def on_enter(e): b.configure(bg="#3a3a3a" if not danger else "#a10000")
+        def on_leave(e): b.configure(bg=bg)
+        b.bind("<Enter>", on_enter); b.bind("<Leave>", on_leave)
+        return b
+
+    titulo = tk.Label(
+        submenu_conc_frame, text="Livro Fiscal",
+        bg="#1e1e1e", fg="#ffffff", font=("Segoe UI", 12, "bold")
+    )
+    titulo.pack(pady=(0, 10))
+
+    botoes = tk.Frame(submenu_conc_frame, bg="#1e1e1e")
+    botoes.pack()
+
+    mk_btn(botoes, "Livro Fiscal × Relatórios", iniciar_conciliacao).pack(fill="x", pady=6)
+    mk_btn(botoes, "Livro Fiscal × Contabilidade", iniciar_comparador_diario).pack(fill="x", pady=6)
+
+    # voltar ao menu principal
+    mk_btn(botoes, "Voltar", construir_menu_principal, danger=True).pack(fill="x", pady=(18, 0))
+
+
+def abrir_submenu_analise():
+    """Submenu "Análise" no content area, com atalhos para telas do Controle de Lojas."""
+    global menu_content_area, current_user
+    if not menu_content_area or not menu_content_area.winfo_exists():
+        return
+
+    _clear_menu_content()
+    frame = tk.Frame(menu_content_area, bg="#1e1e1e")
+    frame.pack(fill="both", expand=True, padx=24, pady=10)
+
+    titulo = tk.Label(frame, text="Análise", font=("Segoe UI", 14, "bold"),
+                      bg="#1e1e1e", fg="#ffffff")
+    titulo.pack(pady=(10, 14))
+
+    def aplicar_brilho(btn):
+        btn.bind("<Enter>", lambda e: btn.config(bg="#00bfff", fg="#000000"))
+        btn.bind("<Leave>", lambda e: btn.config(bg="#2e2e2e", fg="#ffffff"))
+
+    def make_btn(texto, cmd):
+        b = tk.Button(frame, text=texto, command=cmd,
+                      font=("Segoe UI", 12), bg="#2e2e2e", fg="#ffffff",
+                      activebackground="#444444", activeforeground="#00bfff",
+                      relief="flat", bd=0, padx=10, pady=8)
+        b.pack(fill="x", pady=8)
+        aplicar_brilho(b)
+        return b
+
+    # Instancia Controlador "silencioso" para abrir diretamente as telas
+    def _with_controle(call):
+        try:
+            from controle import ControleLojas
+            dummy = ControleLojas(root, None, current_user)
+            call(dummy)  # abre Toplevels específicos
+        except Exception as e:
+            try:
+                messagebox.showerror("Análise", str(e))
+            except Exception:
+                print("[Análise] Erro:", e)
+
+    make_btn("Análise de Vales", lambda: _with_controle(lambda ctl: ctl.abrir_analise_vales()))
+
+    from controle import abrir_analise_de_lojas
+    make_btn("Análise de Lojas", lambda: abrir_analise_de_lojas(root)).pack(pady=6)
+    make_btn("Resultado Mensal", lambda: _with_controle(lambda ctl: ctl.abrir_resultado_mensal()))
+    make_btn("Avaliação de Lojas", lambda: _with_controle(lambda ctl: ctl.abrir_avaliacao_lojas()))
+
+    tk.Button(frame, text="Voltar", command=construir_menu_principal,
+              font=("Segoe UI", 12), bg="#8b0000", fg="#ffffff",
+              activebackground="#E10000", activeforeground="#ffffff",
+              relief="flat", bd=0, padx=10, pady=8).pack(fill="x", pady=(16, 4))
 
 def abrir_submenu_conciliacao():
     """Submenu de conciliação dentro do content area (logo permanece no header)."""
@@ -3775,14 +5153,14 @@ def construir_menu_principal():
         f = tk.Frame(menu_content_area, bg="#1e1e1e")
         f.pack(fill="both", expand=True)
 
-        _make_btn(f, "Livro Fiscal x Relatórios", iniciar_conciliacao)
-        _make_btn(f, "Livro Fiscal x Contabilidade", iniciar_comparador_diario)
-        _make_btn(f, "Contabilidade Detalhada", iniciar_analise_contabil)
-        _make_btn(f, "Análise de Memorando", abrir_analise_memorando)
-        _make_btn(f, "Dinheiro Remetido", iniciar_calculo_dinheiro_remetido)
+        _make_btn(f, "Livro Fiscal", abrir_submenu_livro_fiscal)
+        #_make_btn(f, "Contabilidade Detalhada", iniciar_analise_contabil)
+        _make_btn(f, "Conferência de Caixa", abrir_analise_memorando)
+        #_make_btn(f, "Dinheiro Remetido", iniciar_calculo_dinheiro_remetido)
         _make_btn(f, "Conciliação", abrir_submenu_conciliacao)
-        _make_btn(f, "Gerador de Pastas", iniciar_pastas)
         _make_btn(f, "Controle de Lojas", abrir_controle_lojas)
+        _make_btn(f, "Análise", abrir_submenu_analise) 
+        _make_btn(f, "Gerador de Pastas", iniciar_pastas)
 
     def _show_profile_menu():
         """
@@ -3831,7 +5209,7 @@ def main():
     root = tk.Tk()
     root.title("PRISMA")
     root.configure(bg="#1e1e1e")
-    root.geometry("420x720")
+    root.geometry("420x820")
 
     # Ícone (ignorar falha)
     try:

@@ -4,7 +4,7 @@ import json, os, re
 from collections import defaultdict
 from datetime import datetime
 import calendar
-
+import numpy as np
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
 from reportlab.platypus import (
@@ -13,6 +13,13 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet
 from tkinter import filedialog
 from supabase_config import supabase
+from visualizacao_depositos import VisualizacaoDepositosWindow
+from pathlib import Path
+import sys
+_here = Path(__file__).parent
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
+
 
 MAPA_REGIONAIS = {
     "AMAZONAS": "AM", "AM": "AM",
@@ -79,6 +86,1136 @@ def cnpj_ultimos4(cnpj_str):
     return numeros[-4:] if len(numeros) >= 4 else numeros
 
 
+import tkinter as tk
+from tkinter import ttk, messagebox
+from datetime import datetime, timedelta
+from unidecode import unidecode
+import math, pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import seaborn as sns
+from io import BytesIO
+from PIL import Image, ImageTk
+
+# >>> Severidade de Pendências (novo) <<<
+# Nível 3 (crítico): Falta no caixa, Sem documentação
+# Nível 2 (médio): Comprovante GoodCard
+# Nível 1 (baixo): Atenção, Não iniciada
+PEND_SEVERIDADE = {
+    "FALTA NO CAIXA": 3,
+    "SEM DOCUMENTACAO": 3,
+    "COMPROVANTE GOODCARD": 2,
+    "ATENCAO": 1,
+    "NAO INICIADA": 1,
+}
+CORES_NIVEL_PEND = {3: "#E53935", 2: "#FDD835", 1: "#1E88E5"}  # vermelho / amarelo / azul
+
+STATUS_FINAIS = {"FINALIZADO", "DOMINGO", ""}
+
+def _norm_txt(s: str) -> str:
+    if s is None: return ""
+    s = unidecode(str(s)).strip().upper()
+    s = s.replace("SEM DOCUMENTAÇÃO", "SEM DOCUMENTACAO")
+    s = s.replace("ATENÇÃO", "ATENCAO")
+    s = s.replace("NÃO INICIADA", "NAO INICIADA")
+    return s
+
+def _nivel_pendencia(rot_norm: str) -> int | None:
+    return PEND_SEVERIDADE.get(rot_norm)
+
+def _somar_dias_ignorando_domingo(data_inicial: datetime, dias: int) -> datetime:
+    # Mesma regra do app (D+N ignorando domingos)  → consistente com sua UI atual.
+    # (Este helper local evita dependência de métodos de instância)  [1](https://pmz365-my.sharepoint.com/personal/joao_teles_grupopmz_com_br/Documents/Arquivos%20de%20Microsoft%20Copilot%20Chat/prisma.py)
+    data = data_inicial; add = 0
+    while add < dias:
+        data += timedelta(days=1)
+        if data.weekday() != 6:  # 6=domingo
+            add += 1
+    return data
+
+def _ultimo_dia_mes(ano: int, mes_num: int) -> int:
+    import calendar
+    return calendar.monthrange(ano, mes_num)[1]
+
+
+def _dia_valido_por_vigencia(loja_dict: dict, ano: int, mes_num: int, d: int) -> bool:
+    # Sanear vigência para [1..dias_mes]; se inválida, considerar mês inteiro
+    dias_mes = _ultimo_dia_mes(ano, mes_num)
+    v = (loja_dict or {}).get("vigencia") or {}
+    try:
+        ini = int(v.get("ini", 1) or 1)
+        fim = int(v.get("fim", dias_mes) or dias_mes)
+    except Exception:
+        ini, fim = 1, dias_mes
+
+    # CLAMP + fallback quando 'fim < ini'
+    if ini < 1: ini = 1
+    if fim > dias_mes: fim = dias_mes
+    if fim < ini:
+        # vigência invertida/zerada → usa mês inteiro como fallback
+        ini, fim = 1, dias_mes
+
+    return ini <= int(d) <= fim
+
+def _classificar_dia(loja_dict: dict, ano: int, mes_num: int, d: int, prazo_dias: int):
+    """
+    Retorna:
+      categoria_4: 'sem_pend_dentro'|'sem_pend_fora'|'com_pend_dentro'|'com_pend_fora'|None
+      pendencia_principal: rótulo (ou None)
+      nivel: 3|2|1|None
+      flags: dict
+    Regras: vigência, domingo fora quando não finalizado, D+N ignorando domingo,
+    logs 'manual' apenas (GoodCard +7 automático não conta para 'primeira ação').  [1](https://pmz365-my.sharepoint.com/personal/joao_teles_grupopmz_com_br/Documents/Arquivos%20de%20Microsoft%20Copilot%20Chat/prisma.py)
+    """
+    import calendar
+    dias = (loja_dict.get("dias") or {})
+    meta = (loja_dict.get("meta") or {})
+    dia_str = str(d)
+    status_final = _norm_txt(dias.get(dia_str, ""))
+
+    if calendar.weekday(ano, mes_num, d) == 6 and status_final != "FINALIZADO":
+        return None, None, None, {"ignorado": "domingo_nao_finalizado"}
+
+    logs = (meta.get(dia_str, {}).get("logs") or [])
+    logs_manuais = [l for l in logs if str(l.get("origem","")).lower() == "manual"]
+
+    base = datetime(ano, mes_num, d)
+    limite = _somar_dias_ignorando_domingo(base, prazo_dias).replace(
+        hour=23, minute=59, second=59, microsecond=999999
+    )
+
+    def _ts(x):
+        try: return datetime.strptime(x, "%Y-%m-%d %H:%M:%S")
+        except: return None
+
+    finalizado_ts = None
+    if status_final == "FINALIZADO":
+        ts_txt = (meta.get(dia_str, {}) or {}).get("finalizado_ts")
+        finalizado_ts = _ts(ts_txt) if ts_txt else None
+        if not finalizado_ts:
+            return None, None, None, {"ignorado":"finalizado_sem_ts"}
+
+    logs_manuais_sorted = sorted(logs_manuais, key=lambda l: _ts(l.get("data_hora","")) or datetime.min)
+    houve_pend_previa = False
+    pend_princ = None; nivel = None
+
+    if logs_manuais_sorted:
+        for l in logs_manuais_sorted:
+            st = _norm_txt(l.get("status","")); ts = _ts(l.get("data_hora",""))
+            if st in STATUS_FINAIS: continue
+            if ts and ts <= limite: houve_pend_previa = True
+            pend_princ = st  # último status pendente antes do finalizado
+            n = _nivel_pendencia(st)
+            if n is not None: nivel = n
+
+    if status_final != "FINALIZADO":
+        return None, pend_princ, nivel, {"ignorado":"nao_finalizado"}
+
+    if not finalizado_ts:
+        return None, pend_princ, nivel, {"ignorado":"finalizado_sem_ts"}
+
+    dentro = (finalizado_ts <= limite)
+    if houve_pend_previa:
+        cat = "com_pend_dentro" if dentro else "com_pend_fora"
+    else:
+        cat = "sem_pend_dentro" if dentro else "sem_pend_fora"
+
+    return cat, pend_princ, nivel, {}
+
+
+def _agregar(perfis_docs: list, mes: str, ano: int, incluir_goodcard=True, reg_filtro=None):
+    """
+    Agrega métricas (geral/regional/loja) aplicando:
+    - Vigência por loja no perfil (denominador).
+    - Domingos fora do denominador (a menos que FINALIZADO).
+    - Classificação D+N (ignora domingos) para dentro/fora do prazo.
+    - Logs manuais para pendência principal e severidade.
+    - GoodCard vencidos (opcional).
+    """
+    from collections import Counter
+    from controle import MESES_PTBR, normalizar_regional
+    import calendar
+
+    def _regional_from_doc(loja_dict: dict, perfil_doc: dict) -> str:
+        nome_loja = str((loja_dict or {}).get('loja') or '').strip()
+        r = (loja_dict or {}).get('regional')
+        if r not in (None, '', ' '):
+            return normalizar_regional(r)
+        for lj in (perfil_doc or {}).get('lojas', []) or []:
+            if str(lj.get('loja') or '').strip() == nome_loja:
+                return normalizar_regional(lj.get('regional'))
+        return 'OUTROS'
+
+    mes_num = MESES_PTBR.index(mes) + 1
+    def _ultimo_dia_mes(a: int, m: int) -> int:
+        return calendar.monthrange(a, m)[1]
+    dias_mes = _ultimo_dia_mes(ano, mes_num)
+    base_mes_const = sum(1 for _d in range(1, dias_mes + 1) if calendar.weekday(ano, mes_num, _d) != 6)
+    geral = {
+        'dias_validos': 0, 'finalizados': 0,
+        'sem_pend_dentro': 0, 'sem_pend_fora': 0,
+        'com_pend_dentro': 0, 'com_pend_fora': 0,
+        'goodcard_vencidos': 0,
+    }
+    regionais = {}
+    lojas = {}
+    pend_geral = Counter()
+    pend_geral_nivel = Counter()
+
+    def _init_reg(reg):
+        if reg not in regionais:
+            regionais[reg] = {
+                'dias_validos': 0, 'finalizados': 0,
+                'sem_pend_dentro': 0, 'sem_pend_fora': 0,
+                'com_pend_dentro': 0, 'com_pend_fora': 0,
+                'pend_por_rotulo': Counter(), 'pend_por_nivel': Counter(),
+                'goodcard_vencidos': 0
+            }
+
+    def _init_loja(reg, nome):
+        if (reg, nome) not in lojas:
+            from collections import Counter as _C
+            lojas[(reg, nome)] = {
+                'dias_validos': 0, 'finalizados': 0,
+                'sem_pend_dentro': 0, 'sem_pend_fora': 0,
+                'com_pend_dentro': 0, 'com_pend_fora': 0,
+                'pend_por_rotulo': _C(), 'pend_por_nivel': _C(),
+                'goodcard_vencidos': 0
+            }
+
+    PRAZO_DIAS_DEFAULT = 2
+
+    for perfil in (perfis_docs or []):
+        if str(perfil.get('mes', '')).strip() != f"{mes}/{ano}":
+            continue
+
+        lojas_decl = perfil.get('lojas') or []
+        planilha = perfil.get('planilha') or []
+        def _nome(x):
+            return str((x or {}).get('loja') or '').strip()
+        idx_plan = { _nome(p): p for p in planilha if _nome(p) }
+        entradas = []
+        for lj in lojas_decl:
+            nome = _nome(lj)
+            if not nome:
+                continue
+            base = { 'loja': nome, 'cnpj': lj.get('cnpj', ''), 'regional': lj.get('regional'), 'dias': {}, 'meta': {} }
+            p = idx_plan.get(nome)
+            if p:
+                for k in ('dias', 'meta', 'vigencia', 'regional', 'cnpj'):
+                    if p.get(k) not in (None, '', {}):
+                        base[k] = p.get(k)
+            entradas.append(base)
+        for nome, p in idx_plan.items():
+            if not any(e['loja'] == nome for e in entradas):
+                entradas.append(p)
+
+        def _normalize_loja_maps(e: dict):
+            dm = e.get('dias') or {}
+            if isinstance(dm, dict) and any(not isinstance(k, str) for k in dm.keys()):
+                try:
+                    e['dias'] = {str(k): v for k, v in dm.items()}
+                except Exception:
+                    pass
+            mm = e.get('meta') or {}
+            if isinstance(mm, dict) and any(not isinstance(k, str) for k in mm.keys()):
+                try:
+                    e['meta'] = {str(k): v for k, v in mm.items()}
+                except Exception:
+                    pass
+            v = (e.get('vigencia') or {})
+            try:
+                _ini = int(v.get('ini', 1) or 1)
+                _fim = int(v.get('fim', dias_mes) or dias_mes)
+            except Exception:
+                _ini, _fim = 1, dias_mes
+            if _ini < 1: _ini = 1
+            if _fim > dias_mes: _fim = dias_mes
+            if _fim < _ini: _ini, _fim = 1, dias_mes
+            e['vigencia'] = {'ini': _ini, 'fim': _fim}
+
+        for e in entradas:
+            _normalize_loja_maps(e)
+
+        for loja in entradas:
+            reg = _regional_from_doc(loja, perfil)
+            if reg_filtro and reg != reg_filtro:
+                continue
+            nome = str((loja or {}).get('loja', '')).strip()
+            if not nome:
+                continue
+            _init_reg(reg)
+            _init_loja(reg, nome)
+
+            v = (loja.get('vigencia') or {})
+            try:
+                ini = int(v.get('ini', 1) or 1)
+                fim = int(v.get('fim', dias_mes) or dias_mes)
+            except Exception:
+                ini, fim = 1, dias_mes
+            if ini < 1: ini = 1
+            if fim > dias_mes: fim = dias_mes
+            if fim < ini: ini, fim = 1, dias_mes
+            loja['vigencia'] = {'ini': ini, 'fim': fim}
+            def _in_vig(d_int: int) -> bool:
+                return ini <= int(d_int) <= fim
+
+            
+            vig_atual = int(max(0, fim - ini + 1))
+            lojas[(reg, nome)]['dias_planejados'] = lojas[(reg, nome)].get('dias_planejados', 0) + vig_atual  # soma vigências de perfis (troca de auditor)
+            lojas[(reg, nome)]['dias_vigencia_total'] = lojas[(reg, nome)].get('dias_vigencia_total', 0) + vig_atual
+            lojas[(reg, nome)]['base_mes'] = base_mes_const
+
+
+            for d in range(1, dias_mes + 1):
+                if not _in_vig(d):
+                    continue
+                dia_str = str(d)
+                dias_map = loja.get('dias') or {}
+                status_raw = dias_map.get(dia_str)
+                if status_raw is None:
+                    status_raw = dias_map.get(d)
+                raw_status = status_raw if status_raw is not None else ''
+                status_norm = _norm_txt(raw_status)
+
+                if calendar.weekday(ano, mes_num, d) == 6 and status_norm != 'FINALIZADO':
+                    continue
+                if status_norm == 'DOMINGO':
+                    continue
+
+                lojas[(reg, nome)]['dias_validos'] += 1
+                regionais[reg]['dias_validos'] += 1
+                geral['dias_validos'] += 1
+
+                cat, pend, niv, _ = _classificar_dia(loja, ano, mes_num, d, prazo_dias=PRAZO_DIAS_DEFAULT)
+                if cat is None:
+                    continue
+                lojas[(reg, nome)]['finalizados'] += 1
+                regionais[reg]['finalizados'] += 1
+                geral['finalizados'] += 1
+                lojas[(reg, nome)][cat] = lojas[(reg, nome)].get(cat, 0) + 1
+                regionais[reg][cat] = regionais[reg].get(cat, 0) + 1
+                geral[cat] = geral.get(cat, 0) + 1
+                if pend:
+                    pend_geral[pend] += 1
+                    regionais[reg]['pend_por_rotulo'][pend] += 1
+                    lojas[(reg, nome)]['pend_por_rotulo'][pend] += 1
+                    if niv:
+                        regionais[reg]['pend_por_nivel'][niv] += 1
+                        lojas[(reg, nome)]['pend_por_nivel'][niv] += 1
+
+            if incluir_goodcard:
+                meta = (loja.get('meta') or {})
+                from datetime import datetime
+                for dia_k, info in meta.items():
+                    try:
+                        if not info.get('lembrete_ativo', False):
+                            continue
+                        prazo_txt = info.get('prazo_gc_fim')
+                        if not prazo_txt:
+                            continue
+                        prazo_dt = datetime.strptime(prazo_txt, '%Y-%m-%d %H:%M:%S')
+                        st = _norm_txt((loja.get('dias') or {}).get(str(dia_k), ''))
+                        if datetime.now() > prazo_dt and st != 'FINALIZADO':
+                            lojas[(reg, nome)]['goodcard_vencidos'] += 1
+                            regionais[reg]['goodcard_vencidos'] += 1
+                            geral['goodcard_vencidos'] += 1
+                    except Exception:
+                        pass
+
+    return geral, regionais, lojas, pend_geral, pend_geral_nivel
+
+
+
+def _fig_to_photo(fig, size=None):
+    """Converte uma Figure em PhotoImage respeitando o tema dark e detalhes brancos."""
+    BG = "#1e1e1e"      # fundo
+    FG = "#ffffff"      # detalhes/texto/ticks
+    GRID = "#3a3a3a"    # grade discreta
+
+    # fundo figura
+    fig.patch.set_facecolor(BG)
+
+    # aplica nos eixos
+    for ax in fig.get_axes():
+        ax.set_facecolor(BG)
+        # títulos, rótulos e ticks em branco
+        ax.title.set_color(FG)
+        ax.xaxis.label.set_color(FG)
+        ax.yaxis.label.set_color(FG)
+        ax.tick_params(colors=FG)
+        # bordas em branco
+        for spine in ax.spines.values():
+            spine.set_color(FG)
+        # grade sutil
+        ax.grid(True, color=GRID, alpha=0.6, linewidth=0.6)
+
+        # legenda (se existir): fundo dark, borda branca e texto branco
+        leg = ax.get_legend()
+        if leg:
+            leg.get_frame().set_facecolor(BG)
+            leg.get_frame().set_edgecolor(FG)
+            for txt in leg.get_texts():
+                txt.set_color(FG)
+            if leg.get_title() is not None:
+                leg.get_title().set_color(FG)
+
+    # exporta
+    from io import BytesIO
+    buf = BytesIO()
+    fig.tight_layout()
+    fig.savefig(buf, format="png", dpi=130, facecolor=BG, edgecolor="none")
+    plt.close(fig)
+
+    # converte para PhotoImage
+    buf.seek(0)
+    from PIL import Image, ImageTk
+    img = Image.open(buf)
+    if size:
+        img = img.resize(size, resample=Image.BICUBIC)
+    return ImageTk.PhotoImage(img)
+
+def carregar_perfis_docs():
+    """
+    Carrega os perfis diretamente do Supabase e retorna a lista de docs JSONB.
+    Mantém o formato que a análise precisa: uma lista de dicts (cada 'doc' de perfil).
+    """
+    try:
+        res = supabase.table("perfis").select("doc, mes, usuario_dono").execute()
+        rows = res.data or []
+        # cada row tem {"doc": {...}, "mes": "Mês/Ano", "usuario_dono": "..."}
+        docs = []
+        for r in rows:
+            doc = r.get("doc") or {}
+            # garante que o doc carregado preserve 'mes' e 'usuario_dono' no próprio dict
+            doc.setdefault("mes", r.get("mes"))
+            doc.setdefault("usuario_dono", r.get("usuario_dono"))
+            docs.append(doc)
+        return docs
+    except Exception as e:
+        raise RuntimeError(f"Falha ao carregar perfis do banco: {e}")
+
+
+
+
+
+def abrir_analise_de_lojas(master):
+    """
+    Janela Toplevel — Análise → Análise de Lojas
+
+    Abas:
+      • Geral     → parâmetros + rosca (com legenda) + Pareto (%, em pé), lado a lado
+      • Regionais → empilhado 100% (compacto) + UM Pareto com filtro (tamanho 'congelado')
+      • Lojas     → filtro de regional, barras % (com cor por nível) e heatmap
+
+    Regras (iguais à UI atual):
+      - Vigência por loja; domingo fora quando não finalizado
+      - Prazo D+N (ignora domingos) para "dentro/fora do prazo"
+      - Logs 'manuais' para pendência / 'pendência principal'
+      - GoodCard vencidos: lembrete_ativo & prazo_gc_fim vencido & não finalizado
+    """
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+    import math
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    # --------------------------
+    # 1) Carregar perfis (docs)
+    # --------------------------
+    try:
+        try:
+            perfis_docs_all = carregar_perfis_docs()     # preferido
+        except NameError:
+            perfis_docs_all = carregar_perfis()          # fallback, se ainda existir
+    except Exception as e:
+        messagebox.showerror("Análise de Lojas", f"Falha ao carregar perfis:\n{e}")
+        return
+
+
+    # ------------------------------
+    # 2) Criar janela Toplevel dark
+    # ------------------------------
+    win = tk.Toplevel(master)
+    win.title("Análise de Lojas")
+    win.configure(bg="#1e1e1e")
+    win.geometry("1200x820")
+    try:
+        win.grab_set()
+    except Exception:
+        pass
+
+    # Notebook
+    nb = ttk.Notebook(win)
+    nb.pack(fill="both", expand=True, padx=8, pady=8)
+
+    tab_geral  = tk.Frame(nb, bg="#1e1e1e")
+    tab_regs   = tk.Frame(nb, bg="#1e1e1e")
+    tab_lojas  = tk.Frame(nb, bg="#1e1e1e")
+
+    nb.add(tab_geral, text="Geral")
+    nb.add(tab_regs,  text="Regionais")
+    nb.add(tab_lojas, text="Lojas")
+
+    # --------------------------
+    # 3) ABA GERAL — Parâmetros
+    # --------------------------
+    from controle import MESES_PTBR  # já existe no módulo
+
+    meses_unicos = sorted(
+        {p.get("mes","") for p in (perfis_docs_all or []) if p.get("mes")},
+        key=lambda s: (int(s.split("/")[1]), MESES_PTBR.index(s.split("/")[0])+1)
+    ) if perfis_docs_all else []
+
+    mes_var = tk.StringVar(value=meses_unicos[-1] if meses_unicos else "")
+    prazo_var = tk.IntVar(value=2)          # D+2 (UI)
+    goodcard_var = tk.BooleanVar(value=True)
+
+    barra = tk.Frame(tab_geral, bg="#1e1e1e")
+    barra.pack(fill="x", padx=12, pady=(10, 6))
+
+    tk.Label(barra, text="Mês/Ano:", bg="#1e1e1e", fg="#ffffff").pack(side="left")
+    cb_mes = ttk.Combobox(barra, textvariable=mes_var, values=meses_unicos, width=20)
+    cb_mes.pack(side="left", padx=8)
+
+    tk.Label(barra, text="Prazo (dias):", bg="#1e1e1e", fg="#ffffff").pack(side="left", padx=(16,0))
+    tk.Entry(barra, textvariable=prazo_var, width=6, bg="#2e2e2e", fg="#ffffff",
+             relief="flat", insertbackground="#ffffff").pack(side="left", padx=8)
+
+    tk.Checkbutton(barra, text="Incluir GoodCard vencidos",
+                   variable=goodcard_var, bg="#1e1e1e", fg="#ffffff",
+                   selectcolor="#1e1e1e").pack(side="left", padx=(16,0))
+
+    # KPIs
+    kpi_lbl = tk.Label(tab_geral, bg="#1e1e1e", fg="#ffffff", font=("Segoe UI", 12))
+    kpi_lbl.pack(pady=(6, 6))
+
+    # Linha de gráficos (rosca + pareto geral)
+    geral_row_holder = tk.Frame(tab_geral, bg="#1e1e1e")
+    geral_row_holder.pack(fill="both", expand=True, padx=10, pady=8)
+
+    # ------------------------------------------------
+    # 4) ABA REGIONAIS — widgets fixos + cfg 'lock'
+    # ------------------------------------------------
+    # Empilhado 100% (compacto)
+    regs_100 = tk.Label(tab_regs, bg="#1e1e1e")
+    regs_100.pack(pady=(8, 4))
+
+    # Filtro + Pareto único
+    reg_ctrl = tk.Frame(tab_regs, bg="#1e1e1e")
+    reg_ctrl.pack(fill="x", padx=10, pady=(6, 0))
+    tk.Label(reg_ctrl, text="Regional (Pareto):", bg="#1e1e1e", fg="#ffffff").pack(side="left")
+    reg_sel_var = tk.StringVar(value="")
+    reg_sel_cb  = ttk.Combobox(reg_ctrl, textvariable=reg_sel_var, values=[], width=8)
+    reg_sel_cb.pack(side="left", padx=8)
+
+    pareto_reg_lbl = tk.Label(tab_regs, bg="#1e1e1e")
+    pareto_reg_lbl.pack(pady=8)
+
+    # Config 'congelada' para manter o mesmo look a cada troca
+    pareto_cfg = {
+        "locked": False,            # vira True após 1ª render
+        "fig_w": 0, "fig_h": 0,     # px
+        "dpi": 96,                  # DPI
+        "margins": (0.08, 0.98, 0.86, 0.32),  # left, right, top, bottom
+        "ylim": (0, 100),           # % fixo
+        "tick_rot": 28,
+        "labelsize": 10,
+        "init_frac_w": 0.92,        # frações da largura da janela (1ª vez)
+        "init_frac_h": 0.22,
+    }
+
+    # -------------------------
+    # 5) ABA LOJAS — widgets UI
+    # -------------------------
+    top_ctrl = tk.Frame(tab_lojas, bg="#1e1e1e")
+    top_ctrl.pack(fill="x", padx=10, pady=(10, 2))
+    tk.Label(top_ctrl, text="Regional:", bg="#1e1e1e", fg="#ffffff").pack(side="left")
+    reg_var = tk.StringVar(value="")
+    ttk.Combobox(top_ctrl, textvariable=reg_var, values=["","AM","AP","MA","MT","PA","RR"], width=6).pack(side="left", padx=6)
+
+    lojas_tbl = tk.Frame(tab_lojas, bg="#1e1e1e")
+    lojas_tbl.pack(fill="both", expand=True, padx=10, pady=6)
+
+    lojas_bar = tk.Label(tab_lojas, bg="#1e1e1e")
+    lojas_bar.pack(pady=6)
+
+    lojas_heat = tk.Label(tab_lojas, bg="#1e1e1e")
+    lojas_heat.pack(pady=6)
+
+    # ---------------------------------------
+    # 6) Função principal de Render (_render)
+    # ---------------------------------------
+
+
+
+    def _render():
+        # limpar a linha de gráficos...
+        for w in geral_row_holder.winfo_children():
+            w.destroy()
+
+        if not mes_var.get():
+            messagebox.showwarning("Parâmetros", "Selecione um mês.")
+            return
+
+        mes_nome, ano_str = mes_var.get().split("/")
+        ano_num = int(ano_str)
+        incluir_gc = bool(goodcard_var.get())
+
+                
+        # --- Diagnóstico de origem: memória vs banco ---
+        mes_full = f"{mes_nome}/{ano_str}"
+
+        # A) Fonte A (memória) – lista carregada ao abrir a janela
+        mem_rows = [p for p in (perfis_docs_all or []) if str(p.get("mes","")).strip() == mes_full]
+
+        # B) Fonte B (banco) – query direta no mês (sem filtrar por role)
+        try:
+            res = supabase.table("perfis").select("doc,mes,usuario_dono").eq("mes", mes_full).execute()
+            db_rows = res.data or []
+        except Exception as e:
+            db_rows = []
+            print(f"[ORIGEM] Falha Supabase: {e}")
+
+        db_docs = []
+        for r in db_rows:
+            d = r.get("doc") or {}
+            d.setdefault("mes", r.get("mes"))
+            d.setdefault("usuario_dono", r.get("usuario_dono"))
+            db_docs.append(d)
+
+        def _key(p):
+            return (str(p.get("nome","")).strip(),
+                    str(p.get("mes","")).strip(),
+                    str(p.get("usuario_dono","")).strip())
+
+        mem_keys = { _key(p) for p in mem_rows }
+        db_keys  = { _key(p) for p in db_docs }
+
+        only_mem = sorted(mem_keys - db_keys)
+        only_db  = sorted(db_keys - mem_keys)
+
+        print(f"[ORIGEM] Perfis do mês  mem={len(mem_rows)}  db={len(db_docs)}")
+        if only_mem:
+            print("[ORIGEM] Só na memória:", only_mem)
+        if only_db:
+            print("[ORIGEM] Só no banco  :", only_db)
+
+        # União com dedupe (para a Análise, use o conjunto mais completo)
+        docs_mes = {}
+        for p in mem_rows + db_docs:
+            docs_mes[_key(p)] = p
+        perfis_docs_mes = list(docs_mes.values())
+
+        print(f"[ORIGEM] União p/ análise = {len(perfis_docs_mes)} perfis")
+
+
+        # >>> use a lista já carregada e filtre por mês (memória)
+        perfis_docs_mes = [
+            p for p in (perfis_docs_all or [])
+            if str(p.get("mes", "")).strip() == mes_full
+        ]
+        print(f"[Análise de Lojas] Perfis do mês {mes_full}: {len(perfis_docs_mes)}")
+
+        geral, regionais, lojas, pend_geral, pend_nivel = _agregar(
+            perfis_docs_mes, mes_nome, ano_num,
+            incluir_goodcard=incluir_gc, reg_filtro=None
+        )
+
+        print("[CHECK] dias_validos =", geral.get("dias_validos", 0),
+            "finalizados =", geral.get("finalizados", 0))
+
+
+        # ---------- KPIs ----------
+        dv = geral.get("dias_validos", 0)
+        fin = geral.get("finalizados", 0)
+        pct = 0 if dv == 0 else fin / dv * 100.0
+        kpi_lbl.config(text=f"Dias válidos: {dv:,} | Finalizados: {fin:,} | % Finalizados: {pct:,.1f}%")
+
+        # ============
+        # GERAL: Rosca
+        # ============
+        win.update_idletasks()
+        W_px = max(700, win.winfo_width())
+        # cada gráfico usa ~48% da largura; altura ~62% dessa largura
+        G_W = int(W_px * 0.48)
+        G_H = int(G_W * 0.45)
+
+        base = fin
+        vals = [
+            geral.get("sem_pend_dentro", 0),
+            geral.get("sem_pend_fora",   0),
+            geral.get("com_pend_dentro", 0),
+            geral.get("com_pend_fora",   0),
+        ]
+        rotulos_legenda = [
+            "S.Pendência — No prazo",
+            "S.Pendência — Fora do prazo",
+            "Pendência — No prazo",
+            "Pendência — Fora do prazo",
+        ]
+        rosca_img = None
+        if base > 0 and sum(vals) > 0:
+            fig, ax = plt.subplots(figsize=(G_W/96, G_H/96))
+            # margens ajustadas para evitar cortes (bordas/legenda)
+            fig.subplots_adjust(left=0.12, right=0.74, top=0.92, bottom=0.12)
+
+            wedges, _ = ax.pie(
+                vals,
+                labels=None,  # rótulos só na legenda
+                wedgeprops=dict(width=0.35),
+            )
+            ax.set_title("Finalizados")
+
+            textos = [f"{lbl}: {v/base:.1%}" for lbl, v in zip(rotulos_legenda, vals)]
+            leg = ax.legend(
+                wedges, textos, title="Categorias",
+                loc="center left", bbox_to_anchor=(0.96, 0.5),
+                borderaxespad=0.0, labelcolor="#ffffff",
+                facecolor="#1e1e1e", edgecolor="#ffffff", framealpha=1.0
+            )
+            if leg and leg.get_title():
+                leg.get_title().set_color("#ffffff")
+
+            rosca_img = _fig_to_photo(fig)  # _fig_to_photo salva sem 'apertar' o layout
+
+        # ==========================
+        # GERAL: Pareto (vertical, %)
+        # ==========================
+        pareto_img = None
+        if pend_geral and sum(pend_geral.values()) > 0:
+            total_pend = sum(pend_geral.values())
+            items = sorted(pend_geral.items(), key=lambda kv: kv[1], reverse=True)
+            rot = [k for k, _ in items]
+            val = [(v / total_pend) * 100.0 for _, v in items]
+            cores = [CORES_NIVEL_PEND.get(_nivel_pendencia(_norm_txt(k)), "#90A4AE") for k in rot]
+
+            fig, ax = plt.subplots(figsize=(G_W/96, G_H/96))
+            fig.subplots_adjust(left=0.12, right=0.98, top=0.88, bottom=0.28)
+
+            bars = ax.bar(rot, val, color=cores, edgecolor="#263238")
+            ax.set_title("Pendências — % do total")
+            ax.set_ylabel("%")
+            ax.set_ylim(0, (max(val) * 1.2 if val else 1))
+            ax.tick_params(axis='x', rotation=28)
+            pad = (max(val) * 0.02 if val else 1)
+            for rct, v in zip(bars, val):
+                ax.text(rct.get_x() + rct.get_width()/2, rct.get_height() + pad,
+                        f"{v:.1f}%", ha="center", va="bottom", fontsize=10,
+                        color="#ffffff",
+                        bbox=dict(facecolor="#263238", alpha=0.55, boxstyle="round,pad=0.12"))
+            pareto_img = _fig_to_photo(fig)
+
+        # Alojamento lado a lado (grid 2 colunas)
+        geral_row_holder.grid_columnconfigure(0, weight=1, uniform="plots")
+        geral_row_holder.grid_columnconfigure(1, weight=1, uniform="plots")
+        geral_row_holder.grid_rowconfigure(0, weight=1)
+        if rosca_img:
+            lbl1 = tk.Label(geral_row_holder, image=rosca_img, bg="#1e1e1e")
+            lbl1.image = rosca_img
+            lbl1.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        if pareto_img:
+            lbl2 = tk.Label(geral_row_holder, image=pareto_img, bg="#1e1e1e")
+            lbl2.image = pareto_img
+            lbl2.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+
+        # --------------------------------------
+        # 6.2) REGIONAIS — empilhado 100% leve
+        # --------------------------------------
+        data_emp = []
+        for reg, d in regionais.items():
+            base_reg = d["finalizados"]
+            if base_reg == 0:
+                continue
+            data_emp.append({
+                "Regional": reg,
+                "Sem pend. — dentro do prazo": d["sem_pend_dentro"]/base_reg*100,
+                "Sem pend. — fora do prazo":   d["sem_pend_fora"]/base_reg*100,
+                "Com pend. — dentro do prazo": d["com_pend_dentro"]/base_reg*100,
+                "Com pend. — fora do prazo":   d["com_pend_fora"]/base_reg*100,
+            })
+
+        EMP_W = int(W_px * 0.92)
+        EMP_H = int(W_px * 0.25)
+
+        if data_emp:
+            df_emp = pd.DataFrame(data_emp).set_index("Regional")
+            fig, ax = plt.subplots(figsize=(EMP_W/96, EMP_H/96))
+            fig.subplots_adjust(left=0.08, right=0.88, top=0.88, bottom=0.22)
+
+            cores_emp = ["#1E88E5", "#FDD835", "#43A047", "#E53935"]  # Azul, Amarelo, Verde, Vermelho
+            df_emp[[
+                "Sem pend. — dentro do prazo",
+                "Sem pend. — fora do prazo",
+                "Com pend. — dentro do prazo",
+                "Com pend. — fora do prazo"
+            ]].plot(kind="bar", stacked=True, ax=ax, width=0.85, color=cores_emp)
+
+            ax.set_ylabel("% sobre finalizados")
+            ax.set_title("Análise por Regional")
+            ax.legend(bbox_to_anchor=(1.01, 1), loc="upper left", framealpha=1.0)
+            ax.tick_params(axis='x', rotation=18)
+
+            regs_100_img = _fig_to_photo(fig)
+            regs_100.config(image=regs_100_img, text=""); regs_100.image = regs_100_img
+        else:
+            regs_100.config(image="", text="Sem dados para regionais.", fg="#cccccc")
+
+        # -------------------------------------------------
+        # 6.3) REGIONAIS — Pareto Único (TODAS as pendências)
+        # -------------------------------------------------
+        regs_lista = sorted(regionais.keys(), key=lambda r: (r == "OUTROS", r))
+        reg_sel_cb["values"] = regs_lista
+        if reg_sel_var.get() not in regs_lista:
+            reg_sel_var.set(regs_lista[0] if regs_lista else "")
+
+        def _render_pareto_reg(_evt=None):
+            reg_sel = reg_sel_var.get().strip()
+            if not reg_sel or reg_sel not in regionais:
+                pareto_reg_lbl.config(image="", text="Selecione uma regional.", fg="#cccccc")
+                return
+
+            pend = regionais[reg_sel]["pend_por_rotulo"]
+            if not pend:
+                pareto_reg_lbl.config(image="", text=f"{reg_sel}: sem pendências.", fg="#cccccc")
+                return
+
+            # ► TODAS as pendências (sem limitar a Top-5)
+            tot = sum(pend.values())
+            items = sorted(pend.items(), key=lambda kv: kv[1], reverse=True)
+            rot = [k for k, _ in items]
+            vv  = [(v / tot) * 100.0 for _, v in items]
+            cores = [CORES_NIVEL_PEND.get(_nivel_pendencia(_norm_txt(k)), "#90A4AE") for k in rot]
+
+            # Congelar dimensões na primeira render
+            if not pareto_cfg["locked"]:
+                W0 = max(1000, win.winfo_width())
+                pareto_cfg["fig_w"] = int(W0 * pareto_cfg["init_frac_w"])
+                pareto_cfg["fig_h"] = int(W0 * pareto_cfg["init_frac_h"])
+                pareto_cfg["locked"] = True
+
+            FW = max(640, pareto_cfg["fig_w"])
+            FH = max(240, pareto_cfg["fig_h"])
+            DPI = pareto_cfg["dpi"]
+            L, R, T, B = pareto_cfg["margins"]
+            Y0, Y1     = pareto_cfg["ylim"]
+            xrot       = pareto_cfg["tick_rot"]
+            xsize      = pareto_cfg["labelsize"]
+
+            # Heurísticas de legibilidade para muitos rótulos
+            n = len(rot)
+            if n >= 8:
+                xrot = 32; xsize = 9; B = max(B, 0.36)
+            if n >= 12:
+                xrot = 38; xsize = 8; B = max(B, 0.42)
+            if n >= 18:
+                xrot = 44; xsize = 8; B = max(B, 0.48)
+
+            fig, ax = plt.subplots(figsize=(FW / DPI, FH / DPI), dpi=DPI)
+            fig.subplots_adjust(left=L, right=R, top=T, bottom=B)
+
+            bars = ax.bar(rot, vv, color=cores, edgecolor="#ffffff", linewidth=0.7)
+            ax.set_title(f"{reg_sel} — Pareto (% por pendência)")
+            ax.set_ylabel("%")
+            ax.set_ylim(Y0, Y1)  # Y fixo 0..100
+            ax.tick_params(axis='x', rotation=xrot, labelsize=xsize)
+
+            pad = 100 * 0.02
+            for rct, pval in zip(bars, vv):
+                ax.text(
+                    rct.get_x() + rct.get_width()/2,
+                    min(Y1, pval + pad),
+                    f"{pval:.1f}%",
+                    ha="center", va="bottom", fontsize=10, color="#ffffff",
+                    bbox=dict(facecolor="#263238", alpha=0.55, boxstyle="round,pad=0.12")
+                )
+
+            img = _fig_to_photo(fig)  # _fig_to_photo deve salvar sem tight_layout
+            pareto_reg_lbl.config(image=img, text=""); pareto_reg_lbl.image = img
+
+        # 1ª render do Pareto por regional + bind do filtro
+        _render_pareto_reg()
+        reg_sel_cb.bind("<<ComboboxSelected>>", _render_pareto_reg)
+
+        # ---------------------------------
+        # 6.4) LOJAS — tabela, barras, mapa
+        # ---------------------------------
+        for w in lojas_tbl.winfo_children():
+            w.destroy()
+
+        hdr = ["Regional","Loja","Dias válidos","Finalizados","% Finalizados",
+                "Sem pend. — dentro do prazo","Sem pend. — fora do prazo",
+                "Com pend. — dentro do prazo","Com pend. — fora do prazo",
+                "Pendência principal (mês)","Nível máx. (mês)","GoodCard vencidos"]
+
+        header = tk.Frame(lojas_tbl, bg="#1e1e1e")
+        header.pack(fill="x")
+        for j, col in enumerate(hdr):
+            tk.Label(header, text=col, bg="#000000", fg="#ffffff", font=("Segoe UI", 9),
+                        relief="solid", bd=1, width=18).grid(row=0, column=j, sticky="nsew")
+
+        linhas = []
+        for (reg, nome), d in lojas.items():
+            c3 = int(d["pend_por_nivel"].get(3, 0))
+            c2 = int(d["pend_por_nivel"].get(2, 0))
+            c1 = int(d["pend_por_nivel"].get(1, 0))
+            pontos = 3*c3 + 2*c2 + 1*c1
+
+            dias_validos = int(d.get("dias_validos", 0))  # denominador usado nos KPIs
+            dias_vig_total = int(d.get("dias_vigencia_total", d.get("dias_planejados", dias_validos)))
+            base_mes = int(d.get("base_mes", 0))
+            final = int(d["finalizados"])
+            pct_real = (0 if dias_validos in (0, None) else final / float(dias_validos) * 100.0)
+            pct_norm = (0 if base_mes in (0, None) else final / float(base_mes) * 100.0)
+            troca = "⚑" if (base_mes and dias_vig_total < base_mes) else ""
+
+            linhas.append({
+                "Regional": reg,
+                "Loja": nome,
+                "Pontos (ranking)": pontos,
+                "Pend L3": c3, "Pend L2": c2, "Pend L1": c1,
+
+                # >>> Bases e percentuais
+                "Dias válidos": dias_validos,
+                "Vigência total (mês)": dias_vig_total,
+                "Base do mês (sem dom.)": base_mes,
+
+                "Finalizados": final,
+                "% Finalizados": pct_real,
+                "% Finalizados (normalizado)": pct_norm,
+
+                "Troca no mês": troca,
+
+                # (demais colunas iguais)
+                "Sem pend. — dentro do prazo": d["sem_pend_dentro"],
+                "Sem pend. — fora do prazo": d["sem_pend_fora"],
+                "Com pend. — dentro do prazo": d["com_pend_dentro"],
+                "Com pend. — fora do prazo": d["com_pend_fora"],
+                "Pendência principal (mês)": (max(d["pend_por_rotulo"].items(), key=lambda kv: kv[1])[0] if d["pend_por_rotulo"] else ""),
+                "Nível máx. (mês)": (max(d["pend_por_nivel"].keys(), default=0)),
+                "GoodCard vencidos": d.get("goodcard_vencidos", 0),
+            })
+
+
+
+        df_lojas = pd.DataFrame(linhas) if linhas else pd.DataFrame(columns=hdr)
+
+        # >>> Sugestão: reordenar as colunas do cabeçalho para incluir o ranking de forma visível
+        hdr = ["Regional","Loja",
+            "Pontos (ranking)","Pend L3","Pend L2","Pend L1",   # <<< novas
+            "Dias válidos","Finalizados","% Finalizados",
+            "Sem pend. — dentro do prazo","Sem pend. — fora do prazo",
+            "Com pend. — dentro do prazo","Com pend. — fora do prazo",
+            "Pendência principal (mês)","Nível máx. (mês)","GoodCard vencidos"]
+        
+        
+        # --- MAPA: (regional, loja) -> qtd de auditores únicos no mês ---
+        from collections import defaultdict
+
+        # helper para achar a regional a partir do cadastro geral (self.lojas) — consistente
+        def _regional_cadastro(loja_nome: str) -> str:
+            try:
+                for l in (self.lojas or []):
+                    if l.get("loja") == loja_nome:
+                        return normalizar_regional(l.get("regional"))
+            except Exception:
+                pass
+            return "OUTROS"
+
+        auditores_por_loja = defaultdict(set)   # {(reg, loja): {owners}}
+        
+        for doc in (perfis_docs_mes or []):
+            dono = (doc.get("usuario_dono") or "").strip()
+            for lj in (doc.get("lojas") or []):
+                nome = str(lj.get("loja") or "").strip()
+                if not nome:
+                    continue
+                # regional preferindo o cadastro geral (mais estável)
+                reg = _regional_cadastro(nome) or normalizar_regional(lj.get("regional"))
+                auditores_por_loja[(reg, nome)].add(dono)
+
+        # atalho prático: contagem por loja
+        owners_count = {k: (len(v) if len(v) > 0 else 1) for k, v in auditores_por_loja.items()}
+
+        def _render_lojas_table():
+            for w in lojas_tbl.winfo_children():
+                w.destroy()
+
+            # --- Canvas + Scroll
+            container = tk.Frame(lojas_tbl, bg="#1e1e1e"); container.pack(fill="both", expand=True)
+            canvas = tk.Canvas(container, bg="#1e1e1e", highlightthickness=0)
+            vsb = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+            canvas.configure(yscrollcommand=vsb.set)
+            vsb.pack(side="right", fill="y"); canvas.pack(side="left", fill="both", expand=True)
+            table_frame = tk.Frame(canvas, bg="#1e1e1e")
+            canvas.create_window((0, 0), window=table_frame, anchor="nw")
+            table_frame.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+            canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+
+            # --- Cabeçalho (removidos: Pend L1/L2/L3 e Nível)
+            hdr = [
+                "Regional","Loja","Pontos (ranking)",
+                "Dias válidos (norm.)","Finalizados","% Finalizados",
+                "Sem pend. — dentro do prazo","Sem pend. — fora do prazo",
+                "Com pend. — dentro do prazo","Com pend. — fora do prazo",
+                "Pendência principal (mês)","GoodCard vencidos","Auditores"
+            ]
+            header = tk.Frame(table_frame, bg="#1e1e1e"); header.pack(fill="x")
+            for j, col in enumerate(hdr):
+                tk.Label(header, text=col, bg="#000000", fg="#ffffff",
+                        font=("Segoe UI", 9), relief="solid", bd=1, width=18)\
+                .grid(row=0, column=j, sticky="nsew")
+
+            # --- Monta DataFrame de exibição a partir do dicionário 'lojas'
+            linhas = []
+            for (reg, nome), d in lojas.items():
+                # pontos do ranking (L3=3pts, L2=2pts, L1=1pt) — já vem calculado em outro lugar?
+                c3 = int(d["pend_por_nivel"].get(3, 0))
+                c2 = int(d["pend_por_nivel"].get(2, 0))
+                c1 = int(d["pend_por_nivel"].get(1, 0))
+                pontos = (3*c3 + 2*c2 + 1*c1)
+
+                # bases
+                dv_real = int(d.get("dias_validos", 0))  # base usada na agregação
+                final   = int(d.get("finalizados", 0))
+                # normalização por nº de auditores distintos no mês
+                owners  = int(owners_count.get((reg, nome), 1))
+                dv_norm = max(1, int(round(dv_real / owners))) if dv_real > 0 else 0
+
+                # % finalizados (sobre base normalizada, como você pediu)
+                pct = (0.0 if dv_norm in (0, None) else (final / float(dv_norm) * 100.0))
+
+                linhas.append({
+                    "Regional": reg,
+                    "Loja": nome,
+                    "Pontos (ranking)": pontos,
+                    "Dias válidos (norm.)": dv_norm,
+                    "Finalizados": final,
+                    "% Finalizados": pct,
+                    "Sem pend. — dentro do prazo": int(d["sem_pend_dentro"]),
+                    "Sem pend. — fora do prazo":   int(d["sem_pend_fora"]),
+                    "Com pend. — dentro do prazo": int(d["com_pend_dentro"]),
+                    "Com pend. — fora do prazo":   int(d["com_pend_fora"]),
+                    "Pendência principal (mês)": (max(d["pend_por_rotulo"].items(), key=lambda kv: kv[1])[0]
+                                                if d["pend_por_rotulo"] else ""),
+                    "GoodCard vencidos": int(d.get("goodcard_vencidos", 0)),
+                    "Auditores": owners,
+                })
+
+            df_view = pd.DataFrame(linhas) if linhas else pd.DataFrame(columns=hdr)
+
+            # --- Filtro de regional
+            rf = reg_var.get().strip()
+            if rf:
+                if "Regional" in df_view.columns:
+                    df_view = df_view[df_view["Regional"] == rf]
+                else:
+                    df_view = df_view.iloc[0:0]
+
+            # --- Tipos numéricos e ORDEM por Pontos (ranking) DESC
+            for col in ["Pontos (ranking)","% Finalizados","Finalizados","Dias válidos (norm.)",
+                        "Sem pend. — dentro do prazo","Sem pend. — fora do prazo",
+                        "Com pend. — dentro do prazo","Com pend. — fora do prazo","GoodCard vencidos","Auditores"]:
+                if col in df_view.columns:
+                    df_view[col] = pd.to_numeric(df_view[col], errors="coerce").fillna(0)
+
+            if not df_view.empty:
+                df_view = df_view.sort_values(
+                    by=["Pontos (ranking)", "% Finalizados", "Finalizados", "Dias válidos (norm.)"],
+                    ascending=[False,            False,           False,            False],
+                    kind="mergesort"  # estável; preserva empates
+                )
+
+            # --- Render das linhas
+            body = tk.Frame(table_frame, bg="#1e1e1e"); body.pack(fill="both", expand=True)
+            for i, row in df_view.iterrows():
+                for j, col in enumerate(hdr):
+                    val = row[col]
+                    if isinstance(val, float):
+                        # formata % com 1 casa para a coluna de %; demais com int
+                        txt = f"{val:.1f}%" if col == "% Finalizados" else f"{val:.0f}"
+                    else:
+                        txt = f"{val}"
+                    tk.Label(body, text=txt, bg="#2e2e2e", fg="#ffffff",
+                            font=("Segoe UI", 9), relief="solid", bd=1, width=18)\
+                    .grid(row=i+1, column=j, sticky="nsew")
+
+            # Scroll wheel local
+            def _on_mousewheel(e): canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+            canvas.bind("<MouseWheel>", _on_mousewheel)
+
+            def _render_lojas_barras():
+                rf = reg_var.get().strip()
+                df_view = df_lojas if not rf else df_lojas[df_lojas["Regional"] == rf]
+                if df_view.empty:
+                    lojas_bar.config(image="", text="Sem dados para exibir.", fg="#cccccc"); return
+
+                # Ordena por 'Com pend. — fora do prazo' (quantidade absoluta)
+                df_sorted = df_view.sort_values("Com pend. — fora do prazo", ascending=False).head(10)  # TOP 10
+
+                labels = [f"{r} - {n}" for r, n in zip(df_sorted["Regional"], df_sorted["Loja"])]
+
+                # base: % sobre finalizados da loja
+                base = df_sorted["Finalizados"].where(df_sorted["Finalizados"] > 0, pd.NA)
+                valores = ((df_sorted["Com pend. — fora do prazo"] * 100.0) / base)\
+                        .fillna(0.0).astype(float).tolist()
+
+                cores = [CORES_NIVEL_PEND.get(int(n if not pd.isna(n) else 0), "#90A4AE")
+                        for n in df_sorted.get("Nível máx. (mês)", [0]*len(df_sorted)).values]
+
+                # --- Tamanho e margens dinâmicos (ajusta à tela)
+                Wp = max(900, min(1280, win.winfo_width()))
+                B_W = int(Wp * 0.90)
+                B_H = int(max(260, Wp * 0.28))
+
+                fig, ax = plt.subplots(figsize=(B_W/96, B_H/96))
+                # margens: mais espaço para os rótulos em baixo
+                fig.subplots_adjust(left=0.08, right=0.98, top=0.86, bottom=0.28)
+
+                bars = ax.bar(labels, valores, color=cores, edgecolor="#263238")
+                ax.set_title("Com pendência — fora do prazo (Top 10, % de finalizados)" + (f" — {rf}" if rf else ""))
+
+                ax.set_ylabel("% sobre finalizados")
+                ax.set_ylim(0, (max(valores) * 1.25 if valores else 1))
+                ax.tick_params(axis='x', rotation=18, labelsize=9)
+
+                # rótulo de valor
+                pad = (max(valores) * 0.03 if valores else 1)
+                for i, v in enumerate(valores):
+                    ax.text(i, v + pad, f"{v:.1f}%", ha="center", va="bottom", fontsize=9, color="#ffffff")
+
+                img = _fig_to_photo(fig)
+                lojas_bar.config(image=img, text=""); lojas_bar.image = img
+
+
+        def _on_reg_change(*_):
+            _render_lojas_table()
+            _render_lojas_barras()
+        reg_var.trace_add("write", _on_reg_change)
+
+    # Auto-render: mudar Mês/Ano recalcula; Enter no prazo também
+    def _auto(*_): _render()
+    cb_mes.bind("<<ComboboxSelected>>", lambda _e: _auto())
+    barra.bind("<Return>", lambda _e: _auto())
+
+    # Render inicial e focar na aba Geral
+
+    # Render inicial
+    _render()
+
+    # Focar na aba Geral, apenas quando o Notebook existir e estiver pronto
+    def _select_safe():
+        try:
+            if nb.winfo_exists() and tab_geral.winfo_exists():
+                nb.select(tab_geral)
+        except tk.TclError:
+            pass  # widget foi destruído no meio do caminho; apenas ignore
+
+    # Agenda para depois que a janela estiver mapeada
+    win.after_idle(_select_safe)
+
 class ControleLojas(tk.Frame):
     def __init__(self, master, voltar_callback, current_user):
         super().__init__(master, bg=BG_DARK)
@@ -109,6 +1246,22 @@ class ControleLojas(tk.Frame):
             self.tela_controle_lojas()  # atualiza a tela
         except Exception as e:
             messagebox.showerror("Erro", f"Falha ao limpar perfis:\n{e}")
+    
+    def _ensure_loja_in_perfil(self, perfil: dict, loja_nome: str, cnpj_hint: str = ""):
+        """
+        Garante que 'perfil["lojas"]' contenha a loja informada.
+        Usa cnpj_hint quando fornecido; senão tenta puxar do cadastro (self.lojas).
+        """
+        arr = perfil.setdefault("lojas", [])
+        if any((x.get("loja") == loja_nome) for x in arr):
+            return  # já existe
+
+        # tenta descobrir CNPJ/Regional do cadastro geral
+        info = next((x for x in (self.lojas or []) if x.get("loja") == loja_nome), None)
+        cnpj = cnpj_hint or (info.get("cnpj") if info else "")
+        reg  = normalizar_regional(info.get("regional") if info else "OUTROS")
+
+        arr.append({"loja": loja_nome, "cnpj": cnpj, "regional": reg})
 
 
     def carregar_analise_vales(self):
@@ -131,6 +1284,211 @@ class ControleLojas(tk.Frame):
             return normalizar_loja_valor(nome_loja) in LOJAS_ABREM_DOMINGO
         except Exception:
             return False
+    
+    def _ultimo_dia_mes_from_mes_full(self, mes_full: str) -> int:
+        """Recebe 'Mês/AAAA' e retorna o último dia daquele mês."""
+        try:
+            mes_nome, ano_str = mes_full.split("/")
+            ano = int(ano_str)
+            mes_num = MESES_PTBR.index(mes_nome) + 1
+            import calendar
+            return calendar.monthrange(ano, mes_num)[1]
+        except Exception:
+            return 31  # fallback seguro
+
+    def _get_perfis_do_mes(self, mes_full: str) -> list[dict]:
+        return [p for p in (self.perfis or []) if p.get("mes") == mes_full]
+
+    def _find_planilha_entry(self, perfil: dict, loja_nome: str) -> dict | None:
+        for ent in (perfil.get("planilha") or []):
+            if ent.get("loja") == loja_nome:
+                return ent
+        return None
+
+    def _garantir_entry_destino(self, perfil_dest: dict, loja_origem_entry: dict) -> dict:
+        """Garante que o perfil destino tenha uma entrada de planilha para a loja; cria se necessário."""
+        ent = self._find_planilha_entry(perfil_dest, loja_origem_entry.get("loja"))
+        if ent is None:
+            ent = {
+                "loja": loja_origem_entry.get("loja"),
+                "cnpj": loja_origem_entry.get("cnpj", ""),
+                "dias": {},
+                "meta": {}
+            }
+            perfil_dest.setdefault("planilha", []).append(ent)
+        return ent
+
+    def _mover_faixa_dias(self, ent_origem: dict, ent_destino: dict, dia_ini: int, dia_fim: int):
+        """Move dias e meta no intervalo [dia_ini..dia_fim] da origem para o destino (merge seguro)."""
+        ent_destino.setdefault("dias", {})
+        ent_destino.setdefault("meta", {})
+        ent_origem.setdefault("dias", {})
+        ent_origem.setdefault("meta", {})
+
+        for d in range(int(dia_ini), int(dia_fim) + 1):
+            k = str(d)
+            # dias (status)
+            if k in ent_origem["dias"]:
+                if k not in ent_destino["dias"] or not ent_destino["dias"][k]:
+                    ent_destino["dias"][k] = ent_origem["dias"][k]
+                del ent_origem["dias"][k]
+            # meta (logs etc.)
+            if k in ent_origem["meta"]:
+                if k not in ent_destino["meta"]:
+                    ent_destino["meta"][k] = ent_origem["meta"][k]
+                del ent_origem["meta"][k]
+
+    def abrir_wizard_troca_loja(self):
+        """Wizard para realizar a troca de loja entre perfis dentro do mesmo mês."""
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+        
+        # --- GUARDA DE ACESSO: somente admin ---
+        role = (self.current_user or {}).get("role", "") or ""
+        if role != "admin":
+            try:
+                messagebox.showwarning("Acesso negado", "Somente administradores podem realizar troca de loja.")
+            except Exception:
+                pass
+            return
+
+
+        top = tk.Toplevel(self.master)
+        top.title("Troca de Loja (mês corrente)")
+        top.configure(bg=BG_DARK)
+        top.grab_set()
+
+        # Linha 1: Mês/Ano
+        frm = tk.Frame(top, bg=BG_DARK); frm.pack(padx=16, pady=12, fill="x")
+        meses_unicos = sorted(
+            {p.get("mes","") for p in (self.perfis or []) if p.get("mes")},
+            key=lambda s: (int(s.split("/")[1]), MESES_PTBR.index(s.split("/")[0]) + 1)
+        )
+        tk.Label(frm, text="Mês/Ano:", bg=BG_DARK, fg=FG_TEXT).grid(row=0, column=0, sticky="e", padx=(0,6))
+        mes_var = tk.StringVar(value=meses_unicos[-1] if meses_unicos else "")
+        cb_mes = ttk.Combobox(frm, textvariable=mes_var, values=meses_unicos, width=24)
+        cb_mes.grid(row=0, column=1, sticky="w")
+
+        # Linha 2: Loja + Dia de corte
+        tk.Label(frm, text="Loja:", bg=BG_DARK, fg=FG_TEXT).grid(row=1, column=0, sticky="e", padx=(0,6), pady=(8,0))
+        lojas_nomes = sorted({l.get("loja") for p in self._get_perfis_do_mes(mes_var.get()) for l in (p.get("lojas") or [])})
+        loja_var = tk.StringVar(value=lojas_nomes[0] if lojas_nomes else "")
+        cb_loja = ttk.Combobox(frm, textvariable=loja_var, values=lojas_nomes, width=24)
+        cb_loja.grid(row=1, column=1, sticky="w", pady=(8,0))
+
+        tk.Label(frm, text="Dia de corte:", bg=BG_DARK, fg=FG_TEXT).grid(row=1, column=2, sticky="e", padx=(16,6), pady=(8,0))
+        corte_var = tk.StringVar(value="15")
+        tk.Entry(frm, textvariable=corte_var, width=6, bg=BG_PANEL, fg=FG_TEXT, insertbackground=FG_TEXT, relief="flat").grid(row=1, column=3, sticky="w", pady=(8,0))
+
+        # Linha 3: Perfil origem/destino (do mesmo mês)
+        tk.Label(frm, text="Perfil ORIGEM:", bg=BG_DARK, fg=FG_TEXT).grid(row=2, column=0, sticky="e", padx=(0,6), pady=(8,0))
+        orig_var = tk.StringVar()
+        tk.Label(frm, text="Perfil DESTINO:", bg=BG_DARK, fg=FG_TEXT).grid(row=2, column=2, sticky="e", padx=(16,6), pady=(8,0))
+        dest_var = tk.StringVar()
+
+        def _refresh_perfis(_=None):
+            perfis_mes = self._get_perfis_do_mes(mes_var.get())
+            nomes = [f"{p.get('nome','(sem nome)')} — owner:{p.get('usuario_dono','')}" for p in perfis_mes]
+            cb_orig["values"] = nomes; cb_dest["values"] = nomes
+            if nomes:
+                orig_var.set(nomes[0])
+                dest_var.set(nomes[0])
+            # lojas desse mês
+            nomes_lojas = sorted({l.get("loja") for p in perfis_mes for l in (p.get("lojas") or []) if l.get("loja")})
+            cb_loja["values"] = nomes_lojas
+            if nomes_lojas and not loja_var.get():
+                loja_var.set(nomes_lojas[0])
+
+        cb_orig = ttk.Combobox(frm, textvariable=orig_var, values=[], width=40)
+        cb_orig.grid(row=2, column=1, sticky="w", pady=(8,0))
+        cb_dest = ttk.Combobox(frm, textvariable=dest_var, values=[], width=40)
+        cb_dest.grid(row=2, column=3, sticky="w", pady=(8,0))
+        _refresh_perfis()
+        cb_mes.bind("<<ComboboxSelected>>", _refresh_perfis)
+
+        # Rodapé de ações
+        btns = tk.Frame(top, bg=BG_DARK); btns.pack(pady=12)
+
+        def _resolve_perfil(label_txt: str) -> dict | None:
+            nome = label_txt.split(" — owner:")[0].strip()
+            for p in self._get_perfis_do_mes(mes_var.get()):
+                if p.get("nome","").strip() == nome:
+                    return p
+            return None
+
+        def aplicar():
+            try:
+                mes_full = mes_var.get().strip()
+                loja_nome = loja_var.get().strip()
+                corte = int((corte_var.get() or "0").strip())
+                if not (mes_full and loja_nome and corte > 0):
+                    messagebox.showwarning("Troca de Loja", "Informe todos os campos e um dia de corte > 0.")
+                    return
+
+                perf_origem = _resolve_perfil(orig_var.get())
+                perf_dest   = _resolve_perfil(dest_var.get())
+                if perf_origem is None or perf_dest is None:
+                    messagebox.showwarning("Troca de Loja", "Selecione perfis origem/destino válidos.")
+                    return
+                if perf_origem is perf_dest:
+                    messagebox.showwarning("Troca de Loja", "Origem e destino devem ser diferentes.")
+                    return
+
+                # último dia do mês
+                ultimo = self._ultimo_dia_mes_from_mes_full(mes_full)
+                if corte >= ultimo:
+                    messagebox.showwarning("Troca de Loja", f"O corte deve ser < {ultimo}.")
+                    return
+
+                # localizar entrada da loja na origem
+                ent_o = self._find_planilha_entry(perf_origem, loja_nome)
+                if ent_o is None:
+                    messagebox.showwarning("Troca de Loja", "A loja selecionada não pertence ao perfil de ORIGEM.")
+                    return
+
+                # garantir entrada no destino
+                ent_d = self._garantir_entry_destino(perf_dest, ent_o)
+
+                # ajustar vigências
+                ent_o["vigencia"] = {"ini": 1, "fim": corte}
+                ent_d["vigencia"] = {"ini": corte + 1, "fim": ultimo}
+
+                # mover dias/meta da faixa (corte+1 .. ultimo)
+                self._mover_faixa_dias(ent_o, ent_d, corte + 1, ultimo)
+                
+                self._ensure_loja_in_perfil(perf_origem, loja_nome, ent_o.get("cnpj", ""))
+                self._ensure_loja_in_perfil(perf_dest,   loja_nome, ent_o.get("cnpj", ""))
+
+                # logs de transferência (simples, para auditoria)
+                from datetime import datetime as _dt
+                ts = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+                for perf, papel in ((perf_origem, "origem"), (perf_dest, "destino")):
+                    perf.setdefault("transferencias", [])
+                    perf["transferencias"].append({
+                        "ts": ts,
+                        "loja": loja_nome,
+                        "mes": mes_full,
+                        "papel": papel,
+                        "corte": corte,
+                        "usuario_exec": (self.current_user or {}).get("username","")
+                    })
+
+                # persistir
+                self.salvar_perfis()
+                messagebox.showinfo("Troca de Loja", "Troca aplicada com sucesso.")
+                top.destroy()
+
+            except Exception as e:
+                messagebox.showerror("Troca de Loja", f"Falha ao aplicar troca:\n{e}")
+
+        tk.Button(btns, text="Aplicar", command=aplicar,
+                font=FONT_UI, bg="#31a252", fg=FG_TEXT,
+                activebackground="#6ecf42", activeforeground="#172a38",
+                relief="flat", bd=0, padx=12, pady=8).pack(side="left", padx=8)
+        tk.Button(btns, text="Cancelar", command=top.destroy,
+                font=FONT_UI, bg=BG_PANEL, fg=FG_TEXT,
+                activebackground="#444444", activeforeground=FG_ACTIVE,
+                relief="flat", bd=0, padx=12, pady=8).pack(side="left", padx=8)
 
 
     def salvar_analise_vales(self):
@@ -157,6 +1515,25 @@ class ControleLojas(tk.Frame):
         except Exception as e:
             print("ERRO CARREGAR LOJAS:", e)
             return []
+    
+    def _dia_dentro_vigencia(self, loja_dict: dict, dia_int: int, dias_mes: int) -> bool:
+        """
+        Retorna True se 'dia_int' estiver dentro da vigência cadastrada para a loja neste perfil.
+        - Ausência de 'vigencia' => mês inteiro (1..dias_mes).
+        - Campos ausentes/invalidos são tratados com defaults seguros.
+        """
+        try:
+            v = (loja_dict or {}).get("vigencia") or {}
+            if not isinstance(v, dict):
+                return True
+            ini = int(v.get("ini", 1) or 1)
+            fim = int(v.get("fim", dias_mes) or dias_mes)
+            if ini < 1: ini = 1
+            if fim > dias_mes: fim = dias_mes
+            return ini <= int(dia_int) <= fim
+        except Exception:
+            # Se algo vier torto, não quebra contagem: considera válido (compatível com antes)
+            return True
 
 
     def carregar_perfis(self):
@@ -303,6 +1680,26 @@ class ControleLojas(tk.Frame):
         btn.pack(fill="x", pady=10, ipady=ipady)
         return btn
 
+    def _voltar_sem_fechar(self):
+        """
+        Volta para a tela anterior (menu principal) SEM destruir o root.
+        Se houver voltar_callback (e ele apenas troca de tela), usa; senão, vai para a tela_inicial do módulo.
+        """
+        try:
+            if callable(self.voltar_callback):
+                # O voltar_callback NO APP PRINCIPAL deve apenas trocar de frame/tela.
+                # Ele NÃO pode chamar root.destroy() / master.destroy().
+                self.voltar_callback()
+                return
+        except Exception:
+            pass
+
+        # Plano B: volta para a tela inicial do próprio módulo
+        try:
+            self.tela_inicial()
+        except Exception:
+            self.limpar_conteudo()
+
     def tela_inicial(self):
         self.limpar_conteudo()
 
@@ -335,15 +1732,16 @@ class ControleLojas(tk.Frame):
             relief="flat", bd=0, padx=10, pady=10
         ).pack(fill="x", padx=50, pady=5)
 
-        self.criar_botao_menu(
-            btn_menu,
-            "Análise de Vales",
-            self.abrir_analise_vales,  # nova função a ser criada
-            bg=BG_PANEL, fg=FG_TEXT,
-            bg_hover="#00c9ff", fg_hover=FG_TEXT,
-            active_bg="#08b4ff", active_fg="#172a38",
-            padx=PADX, ipady=IPADY
-        )
+        tk.Button(
+            self.conteudo_frame,
+            text="Visualização (Minhas Lojas)",
+            command=self.abrir_visualizacao_minhas_global,
+            font=FONT_UI,
+            bg="#007acc", fg=FG_TEXT,
+            activebackground="#3399ff", activeforeground="#ffffff",
+            relief="flat", bd=0, padx=10, pady=10
+        ).pack(fill="x", padx=50, pady=5)
+
         # botão exclusivo para admin: limpar TODOS os perfis
         role = (self.current_user or {}).get("role", "")
 
@@ -365,7 +1763,7 @@ class ControleLojas(tk.Frame):
 
 
         self.criar_botao_menu(
-            btn_menu, "Voltar", self.voltar_callback,
+            btn_menu, "Voltar", self._voltar_sem_fechar,
             bg="#8b0000", fg=FG_TEXT,            
             bg_hover="#aa0000", fg_hover=FG_TEXT, 
             active_bg="#aa0000", active_fg=FG_TEXT,
@@ -428,7 +1826,7 @@ class ControleLojas(tk.Frame):
 
             # só habilita scroll se houver mais de 4 perfis
             if len(perfis_para_mostrar) > 4:
-                canvas.bind_all("<MouseWheel>", _on_mousewheel)
+                canvas.bind("<MouseWheel>", _on_mousewheel)
 
             canvas.pack(fill="both", expand=True)
 
@@ -500,27 +1898,18 @@ class ControleLojas(tk.Frame):
                 self.perfis = todos
 
 
-        tk.Button(
-            self.conteudo_frame,
-            text="Resultado Mensal",
-            command=self.abrir_resultado_mensal,
-            font=FONT_UI,
-            bg="#31a252", fg=FG_TEXT,
-            activebackground="#6ecf42", activeforeground="#172a38",
-            relief="flat", bd=0, padx=10, pady=10
-        ).pack(fill="x", padx=50, pady=5)
+        role = (self.current_user or {}).get("role", "") or ""
+        if role == "admin":
+            tk.Button(
+                self.conteudo_ri_frame if hasattr(self, "conteudo_ri_frame") else self.conteudo_frame,
+                text="Troca de Loja (mês corrente)",
+                command=self.abrir_wizard_troca_loja,
+                font=FONT_UI, bg="#007acc", fg=FG_TEXT,
+                activebackground="#3399ff", activeforeground="#ffffff",
+                relief="flat", bd=0, padx=10, pady=10
+            ).pack(fill="x", padx=50, pady=5)
 
-        
-        tk.Button(
-            self.conteudo_frame,
-            text="Avaliação de Lojas",
-            command=self.abrir_avaliacao_lojas,
-            font=FONT_UI,
-            bg="#007acc", fg=FG_TEXT,
-            activebackground="#3399ff", activeforeground="#ffffff",
-            relief="flat", bd=0, padx=10, pady=10
-        ).pack(fill="x", padx=50, pady=5)
-       
+     
         # Botão: Voltar
         tk.Button(
             self.conteudo_frame, text="Voltar",
@@ -530,13 +1919,120 @@ class ControleLojas(tk.Frame):
             relief="flat", bd=0, padx=10, pady=10
         ).pack(fill="x", padx=50, pady=5)
 
-
-
     def excluir_perfil(self, perfil):
         if messagebox.askyesno("Excluir Perfil", f"Excluir '{perfil['nome']}'?"):
             self.perfis = [p for p in self.perfis if p is not perfil]
             self.salvar_perfis()
             self.tela_controle_lojas()
+
+    # --- Botão: Visualização (Minhas Lojas do mês) ---
+
+    def _lojas_do_usuario_mes(self, username: str, mes_full: str) -> list[str]:
+        """
+        Retorna lista única de lojas vinculadas ao usuario_dono == username
+        nos perfis do mês (formato 'Mês/Ano').
+        """
+        from tkinter import messagebox
+        try:
+            res = (supabase
+                .table("perfis")
+                .select("doc,mes,usuario_dono")
+                .eq("mes", mes_full)
+                .eq("usuario_dono", username)
+                .execute())
+            rows = res.data or []
+        except Exception as e:
+            messagebox.showerror("Visualização", f"Falha ao consultar perfis do usuário:\n{e}")
+            return []
+
+        s = set()
+        for row in rows:
+            doc = row.get("doc") or {}
+            for lj in (doc.get("lojas") or []):
+                nome = lj.get("loja")
+                if nome:
+                    s.add(str(nome))
+
+        def _k(x):
+            sx = str(x)
+            return (0, int(sx)) if sx.isdigit() else (1, sx.lower())
+        return sorted(s, key=_k)
+
+    def abrir_visualizacao_minhas_global(self):
+        """Abre um modal pedindo Mês/Ano e, em seguida, abre a visualização filtrada pelas MINHAS lojas."""
+        import tkinter as tk
+        from tkinter import messagebox
+
+        # --- modal ---
+        top = tk.Toplevel(self.master)
+        top.title("Visualização (Minhas Lojas)")
+        top.configure(bg=BG_DARK)
+        top.resizable(False, False)
+        top.grab_set()
+
+        # Mês/Ano defaults
+        from datetime import datetime
+        ano_atual = datetime.now().year
+        anos = [str(a) for a in range(ano_atual-2, ano_atual+3)]
+        mes_atual = MESES_PTBR[datetime.now().month-1]
+
+        mes_var = tk.StringVar(value=mes_atual)
+        ano_var = tk.StringVar(value=str(ano_atual))
+
+        frm = tk.Frame(top, bg=BG_DARK); frm.pack(padx=16, pady=16)
+
+        tk.Label(frm, text="Mês:", bg=BG_DARK, fg=FG_TEXT, font=FONT_UI).grid(row=0, column=0, padx=(0,6), sticky="e")
+        mes_menu = tk.OptionMenu(frm, mes_var, *MESES_PTBR)
+        mes_menu.configure(bg=BG_PANEL, fg=FG_TEXT, relief="flat", bd=0, highlightthickness=0, activebackground="#444444")
+        mes_menu.grid(row=0, column=1, padx=(0,16), sticky="w")
+
+        tk.Label(frm, text="Ano:", bg=BG_DARK, fg=FG_TEXT, font=FONT_UI).grid(row=0, column=2, padx=(0,6), sticky="e")
+        ano_menu = tk.OptionMenu(frm, ano_var, *anos)
+        ano_menu.configure(bg=BG_PANEL, fg=FG_TEXT, relief="flat", bd=0, highlightthickness=0, activebackground="#444444")
+        ano_menu.grid(row=0, column=3, sticky="w")
+
+        def abrir():
+            mes_full = f"{mes_var.get()}/{ano_var.get()}"
+            username = (self.current_user or {}).get("username", "")
+            lojas = self._lojas_do_usuario_mes(username, mes_full)
+            if not lojas:
+                messagebox.showinfo("Visualização", "Você não possui lojas vinculadas neste mês.")
+                return
+
+            # garante caminho do módulo
+            try:
+                import sys, importlib, pathlib
+                here = pathlib.Path(__file__).parent
+                if str(here) not in sys.path:
+                    sys.path.insert(0, str(here))
+                viz = importlib.import_module("visualizacao_depositos")
+                VisualizacaoDepositosWindow = getattr(viz, "VisualizacaoDepositosWindow")
+            except Exception as e:
+                messagebox.showerror("Visualização", f"Não foi possível carregar a janela de visualização:\n{e}")
+                return
+
+            # Abre a janela filtrada
+            
+            VisualizacaoDepositosWindow(
+                master=self.master,
+                lojas_filter=lojas,        # lista de lojas vindas do Supabase (usuario_loja)
+                mes=mes_var.get(),
+                ano=int(ano_var.get()),
+                titulo_extra=" • Minhas Lojas"
+            )
+
+            top.destroy()
+
+        btns = tk.Frame(top, bg=BG_DARK); btns.pack(pady=(8,12))
+        tk.Button(btns, text="Abrir", command=abrir,
+                font=FONT_UI, bg="#007acc", fg=FG_TEXT,
+                activebackground="#3399ff", activeforeground="#ffffff",
+                relief="flat", bd=0, padx=12, pady=8).grid(row=0, column=0, padx=6)
+        tk.Button(btns, text="Cancelar", command=top.destroy,
+                font=FONT_UI, bg=BG_PANEL, fg=FG_TEXT,
+                activebackground="#444444", activeforeground=FG_TEXT,
+                relief="flat", bd=0, padx=12, pady=8).grid(row=0, column=1, padx=6)
+
 
     def janela_criar_perfil(self):
         import tkinter as tk
@@ -616,7 +2112,7 @@ class ControleLojas(tk.Frame):
                 return
             canvas.yview_scroll(-1 if delta > 0 else 1, "units")
 
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind("<MouseWheel>", _on_mousewheel)
 
         selecoes = []
         for reg, lista in self.agrupar_por_regional(self.lojas):
@@ -705,10 +2201,13 @@ class ControleLojas(tk.Frame):
 
 
     def abrir_janela_planilha(self, perfil):
-        janela = tk.Toplevel(self.master)
+        janela = tk.Toplevel(self.winfo_toplevel())
         janela.title(f"Planilha — {perfil['nome']} ({perfil['mes']})")
         janela.configure(bg=BG_DARK)
         janela.state("zoomed")
+        
+        janela.update_idletasks()
+        janela.minsize(1024, 600)
 
         self.mapa_celulas = {}   # (loja_nome, dia) -> label
 
@@ -728,34 +2227,51 @@ class ControleLojas(tk.Frame):
         tk.Label(tabela_frame, text="CNPJ", font=FONT_UI, bg=BG_DARK, fg=FG_TEXT, width=8).grid(row=0, column=1, sticky="nsew")
         
         for d in range(1, dias_mes + 1):
-            tk.Label(tabela_frame, text=str(d), font=FONT_UI, bg="#000000", fg=FG_TEXT, width=7, relief="solid", bd=1).grid(row=0, column=d + 1, sticky="nsew")
+            tk.Label(tabela_frame, text=str(d), font=FONT_UI, bg="#000000", fg=FG_TEXT, width=6, relief="solid", bd=1).grid(row=0, column=d + 1, sticky="nsew")
 
         if "planilha" not in perfil or not perfil["planilha"]:
             perfil["planilha"] = []
             for loja in perfil["lojas"]:
                 perfil["planilha"].append({"loja": loja["loja"], "cnpj": loja["cnpj"], "dias": {}})
 
+
         def aplicar_status(status, dia, loja, lbl):
             """
             Registra a ação (com data/hora e origem), mantém compatibilidade com a estrutura atual
-            e, no caso de 'Comprovante GoodCard', lança a marcação automática +7 (logada como automática).
-            Nada de cálculo aqui — apenas coleta/estrutura de dados para a fase B.
+            e, no caso de 'Comprovante GoodCard', agenda lembrete de +7.
+
+            >>> NOVO: bloqueio de edição fora da vigência da loja neste perfil.
             """
-            # Imports locais para não exigir mudança no topo do arquivo
             from datetime import datetime, timedelta
+            # ---------------- BLOQUEIO POR VIGÊNCIA ----------------
+            try:
+                # 'dia' chega como string; convertemos para int
+                d_int = int(dia)
+            except Exception:
+                d_int = None
 
-            # Prazo configurável (padrão: 2 dias)
-            if not hasattr(self, "PRAZO_FINALIZACAO_DIAS"):
-                self.PRAZO_FINALIZACAO_DIAS = 2
-            PRAZO_DIAS = int(self.PRAZO_FINALIZACAO_DIAS)
+            # dias_mes veio do contexto já calculado no início da função
+            if d_int is None or not self._dia_dentro_vigencia(loja, d_int, dias_mes):
+                try:
+                    v = (loja or {}).get("vigencia") or {}
+                    ini = v.get("ini", 1)
+                    fim = v.get("fim", dias_mes)
+                    messagebox.showinfo(
+                        "Edição bloqueada",
+                        f"Dia {dia} está fora da vigência desta loja neste perfil.\n"
+                        f"Vigência: {ini}–{fim}."
+                    )
+                except Exception:
+                    pass
+                return
+            # -------------------------------------------------------
 
-            # --- Garantir estrutura de metadados por loja/dia (sem quebrar 'dias' existente) ---
+            # ---------- Garantir estrutura de metadados por loja/dia ----------
             # loja: dict como {"loja": "...", "cnpj": "...", "dias": {...}, "meta": {...}}
             if "meta" not in loja:
                 loja["meta"] = {}
             if dia not in loja["meta"]:
                 loja["meta"][dia] = {"logs": []}  # cada log: {status, data_hora, origem, auto_goodcard}
-
             meta_dia = loja["meta"][dia]
 
             # Horário agora (uma única referência temporal para esta ação manual)
@@ -770,21 +2286,23 @@ class ControleLojas(tk.Frame):
                 loja["meta"][dia_ref]["logs"].append({
                     "status": status_ref,
                     "data_hora": (ts or agora).strftime("%Y-%m-%d %H:%M:%S"),
-                    "origem": origem_ref,                 # "manual" | "automatica"
-                    "auto_goodcard": bool(flag_auto)      # True somente para o +7 automático
+                    "origem": origem_ref,  # "manual" | "automatica"
+                    "auto_goodcard": bool(flag_auto)  # True somente para o +7 automático
                 })
 
-            # --- Cálculo do limite (fim do dia D + PRAZO_DIAS) ---
+            # ---------- Cálculo do limite (fim do dia D + PRAZO_DIAS) ----------
+            if not hasattr(self, "PRAZO_FINALIZACAO_DIAS"):
+                self.PRAZO_FINALIZACAO_DIAS = 2
+            PRAZO_DIAS = int(self.PRAZO_FINALIZACAO_DIAS)
             try:
                 dia_int = int(dia)
-                data_base = datetime(ano, mes_num, dia_int)
+                data_base = datetime(ano, mes_num, dia_int)  # 'ano' e 'mes_num' já definidos acima
                 limite = self.somar_dias_ignorando_domingo(data_base, PRAZO_DIAS)
                 limite = limite.replace(hour=23, minute=59, second=59, microsecond=999999)
             except Exception:
-                # fallback defensivo; não deve acontecer em uso normal
                 limite = agora
 
-            # --- Marcação visual e persistência do status do DIA selecionado ---
+            # ---------- Marcação visual e persistência do status ----------
             loja["dias"][dia] = status
             cor = CORES_STATUS.get(status, BG_PANEL)
 
@@ -793,50 +2311,40 @@ class ControleLojas(tk.Frame):
             texto_celula = "" if (status and status.strip() != "") else numero_loja
             lbl.configure(bg=cor, text=texto_celula, anchor="center", relief="solid", bd=1)
 
-            # --- LOG da ação MANUAL no dia selecionado ---
+            # ---------- LOG da ação MANUAL ----------
             _append_log(dia, status, origem_ref="manual", flag_auto=False, ts=agora)
 
-            # --- Primeira ação manual & pendência no prazo ---
-            # Se ainda não há "primeira_acao_manual_ts", esta ação manual passa a ser a primeira
+            # Primeira ação manual & pendência no prazo
             if "primeira_acao_manual_ts" not in meta_dia:
                 meta_dia["primeira_acao_manual_ts"] = agora.strftime("%Y-%m-%d %H:%M:%S")
                 meta_dia["primeira_acao_manual_status"] = status
 
-            # Se for pendência (qualquer status diferente de "Finalizado" e "Domingo") dentro do prazo, congela o prazo
-            # Observação: "Comprovante GoodCard" MANUAL conta como pendência, mas o +7 AUTOMÁTICO não conta
+            # Se for pendência (qualquer status != Finalizado/Domingo/"") dentro do prazo, congela o prazo
             if status not in ("Finalizado", "Domingo", "") and agora <= limite:
                 meta_dia["houve_pendencia_no_prazo"] = True
 
             # Se finalizou agora, registra o timestamp e desativa lembrete
             if status == "Finalizado":
                 meta_dia["finalizado_ts"] = agora.strftime("%Y-%m-%d %H:%M:%S")
-                # se houver lembrete ativo para este dia, desligue
                 try:
                     meta_dia["lembrete_ativo"] = False
                 except Exception:
                     pass
 
-            # --- Regra especial: GoodCard --- (NOVO: sem pintar D+7; apenas agenda lembrete)
+            # --- Regra especial: GoodCard --- (não pinta D+7; apenas agenda lembrete)
             if status == "Comprovante GoodCard":
                 try:
-                    from datetime import timedelta
-                    # registra o timestamp do lançamento do GoodCard
                     meta_dia["goodcard_ts"] = agora.strftime("%Y-%m-%d %H:%M:%S")
-                    # calcula o prazo: D + 7, fim do dia
-                    dia_int = int(dia)
-                    data_base = datetime(ano, mes_num, dia_int)
                     prazo_fim = self.somar_dias_ignorando_domingo(data_base, 7)
                     prazo_fim = prazo_fim.replace(hour=23, minute=59, second=59, microsecond=999999)
                     meta_dia["prazo_gc_fim"] = prazo_fim.strftime("%Y-%m-%d %H:%M:%S")
-                    # ativa lembrete recorrente até finalizar
                     meta_dia["lembrete_ativo"] = True
                 except Exception:
                     pass
 
-
             # Atualiza o painel lateral (já existia)
             atualizar_quadro_resultados()
-            
+
             # Se a janela de resultados estiver aberta, atualiza os cards em tempo real
             if hasattr(self, "_cards_labels_resultados_ref") and self._cards_labels_resultados_ref:
                 try:
@@ -976,12 +2484,29 @@ class ControleLojas(tk.Frame):
         linha_obs = tk.Frame(obs_frame, bg=BG_DARK)
         linha_obs.pack(fill="x", pady=6)
 
+
+        # --- Observações: Campo LOJA (robusto a lista vazia) ---
         tk.Label(linha_obs, text="Loja:", bg=BG_DARK, fg=FG_TEXT).grid(row=0, column=0, padx=5)
+
         loja_var = tk.StringVar()
+
+        # Nomes das lojas deste perfil (pode estar vazio, dependendo da troca)
         lojas_nomes = [l["loja"] for l in perfil["lojas"]]
-        loja_menu = tk.OptionMenu(linha_obs, loja_var, *lojas_nomes)
+
+        if lojas_nomes:
+            # Define o valor inicial e cria o OptionMenu com a lista
+            loja_var.set(lojas_nomes[0])
+            loja_menu = tk.OptionMenu(linha_obs, loja_var, *lojas_nomes)
+        else:
+            # Placeholder para evitar TypeError e sinalizar que não há lojas no perfil
+            placeholder = "(sem lojas)"
+            loja_var.set(placeholder)
+            loja_menu = tk.OptionMenu(linha_obs, loja_var, placeholder)
+            loja_menu.configure(state="disabled")  # desabilitado quando vazio
+
         loja_menu.configure(bg=BG_PANEL, fg=FG_TEXT, relief="flat")
         loja_menu.grid(row=0, column=1, padx=5)
+
 
         tk.Label(linha_obs, text="Dia:", bg=BG_DARK, fg=FG_TEXT).grid(row=0, column=2, padx=5)
         dia_var = tk.StringVar()
@@ -1016,67 +2541,152 @@ class ControleLojas(tk.Frame):
                 activebackground="#444444", activeforeground=FG_ACTIVE,
                 relief="flat", bd=0, padx=12, pady=6).grid(row=0, column=6, padx=5)
 
+        # --- FILTRO DE OBSERVAÇÕES (VISUAL) ---
+        filtro_obs_frame = tk.Frame(obs_frame, bg=BG_DARK)
+        filtro_obs_frame.pack(fill="x", pady=(10, 6), anchor="w")
+
+        tk.Label(
+            filtro_obs_frame,
+            text="Observações – Filtrar por loja:",
+            bg=BG_DARK,
+            fg=FG_TEXT,
+            font=("Segoe UI", 9, "bold")
+        ).pack(side="left")
+
+        obs_loja_filtro_var = tk.StringVar(value="Todas")
+
+        cb_obs_loja_filtro = ttk.Combobox(
+            filtro_obs_frame,
+            textvariable=obs_loja_filtro_var,
+            state="readonly",
+            width=22
+        )
+        cb_obs_loja_filtro.pack(side="left", padx=6)
+
         obs_table = tk.Frame(obs_frame, bg=BG_DARK)
         obs_table.pack(fill="x", pady=(10, 0), anchor="w")
+
 
         def atualizar_tabela_obs():
             for w in obs_table.winfo_children():
                 w.destroy()
 
-            tk.Label(obs_table, text="Observações Registradas:",
-                    font=("Segoe UI", 12, "bold"), bg=BG_DARK, fg=FG_TEXT).grid(row=0, column=0, columnspan=2, sticky="w")
+            loja_filtro = obs_loja_filtro_var.get()
 
-            obs_table.grid_columnconfigure(0, weight=1)  
-            obs_table.grid_columnconfigure(1, weight=0)  
+            observacoes = perfil.get("observacoes", [])
+            linha = 1
+            encontrou = False
 
-            for i, obs in enumerate(perfil["observacoes"], start=1):
-                texto = f"Loja {obs['loja']} - Dia {obs['dia']}: {obs['texto']}"
-                tk.Label(obs_table, text=texto,
-                        bg=BG_DARK, fg=FG_TEXT,
-                        anchor="w", justify="left", wraplength=720).grid(row=i, column=0, sticky="w", padx=10, pady=4)
+            for obs in observacoes:
+                nome_loja = obs.get("loja", "")
 
-                def excluir_obs(index=i-1):
+                if loja_filtro != "Todas" and nome_loja != loja_filtro:
+                    continue
+
+                encontrou = True
+                texto = f"Loja {nome_loja} - Dia {obs['dia']}: {obs['texto']}"
+
+                tk.Label(
+                    obs_table,
+                    text=texto,
+                    bg=BG_DARK,
+                    fg=FG_TEXT,
+                    anchor="w",
+                    justify="left",
+                    wraplength=720,
+                    font=("Segoe UI", 9)
+                ).grid(row=linha, column=0, sticky="w", padx=10, pady=2)
+
+                def excluir_obs(index=observacoes.index(obs)):
                     if messagebox.askyesno("Excluir", "Deseja excluir esta observação?"):
                         perfil["observacoes"].pop(index)
                         self.salvar_perfis()
                         atualizar_tabela_obs()
                         atualizar_quadro_resultados()
 
-                tk.Button(obs_table, text="Excluir", command=excluir_obs,
-                        font=FONT_UI, bg="#8b0000", fg=FG_TEXT,
-                        activebackground="#aa0000", activeforeground=FG_ACTIVE,
-                        relief="flat", bd=0, padx=10, pady=4, width=8).grid(row=i, column=1, sticky="e", padx=10, pady=4)
+                tk.Button(
+                    obs_table,
+                    text="Excluir",
+                    command=excluir_obs,
+                    font=FONT_UI,
+                    bg="#8b0000",
+                    fg=FG_TEXT,
+                    activebackground="#aa0000",
+                    activeforeground=FG_ACTIVE,
+                    relief="flat",
+                    bd=0,
+                    padx=8,
+                    pady=2,
+                    width=8
+                ).grid(row=linha, column=1, padx=6, pady=2)
 
+                linha += 1
+
+            if not encontrou:
+                tk.Label(
+                    obs_table,
+                    text="Nenhuma observação para esta loja.",
+                    bg=BG_DARK,
+                    fg="#b0b0b0",
+                    anchor="w",
+                    font=("Segoe UI", 9)
+                ).grid(row=1, column=0, sticky="w", padx=10, pady=6)
+
+        def atualizar_filtro_obs():
+            lojas = sorted({obs["loja"] for obs in perfil.get("observacoes", [])})
+            valores = ["Todas"] + lojas
+
+            cb_obs_loja_filtro["values"] = valores
+
+            if obs_loja_filtro_var.get() not in valores:
+                obs_loja_filtro_var.set("Todas")
+
+        
+        cb_obs_loja_filtro.bind(
+            "<<ComboboxSelected>>",
+            lambda e: atualizar_tabela_obs()
+        )
+                
+        atualizar_filtro_obs()
         atualizar_tabela_obs()
 
         quadro_resultados = tk.Frame(painel_direito, bg=BG_DARK)
         quadro_resultados.pack(anchor="n", padx=10, pady=20)
 
+
+
+
         def atualizar_quadro_resultados():
+            # limpa o painel
             for w in quadro_resultados.winfo_children():
                 w.destroy()
 
             tk.Label(
                 quadro_resultados, text="Quadro de Resultados:",
-                font=("Segoe UI", 12, "bold"),
+                font=("Segoe UI", 8, "bold"),
                 bg=BG_DARK, fg=FG_TEXT
             ).pack(anchor="w", pady=(0, 6))
 
+            # Garantias básicas
             if "planilha" not in perfil or perfil["planilha"] is None:
                 perfil["planilha"] = []
 
+            # Garante que a planilha tenha uma entrada por loja do perfil
             nomes_lojas = {l["loja"] for l in perfil["lojas"]}
             existentes = {p["loja"] for p in perfil["planilha"]}
-
             for loja in perfil["lojas"]:
                 if loja["loja"] not in existentes:
                     perfil["planilha"].append({"loja": loja["loja"], "cnpj": loja["cnpj"], "dias": {}})
-
             perfil["planilha"] = [p for p in perfil["planilha"] if p["loja"] in nomes_lojas]
 
             total_finalizados = 0
             total_dias_validos = 0
             linhas_texto = []
+
+            # >>> Contexto do mês (já calculado acima; reusamos variáveis locais)
+            # ano, mes_num e dias_mes foram definidos no começo de abrir_janela_planilha
+            # (se não estiverem no escopo, recalcule como no restante do arquivo)
+            import calendar
 
             for loja in perfil["planilha"]:
                 dias_validos = []
@@ -1084,26 +2694,32 @@ class ControleLojas(tk.Frame):
 
                 for d in range(1, dias_mes + 1):
                     dia_str = str(d)
+
+                    # >>> NOVO: respeitar vigência da loja neste perfil
+                    if not self._dia_dentro_vigencia(loja, d, dias_mes):
+                        continue  # fora da vigência não entra no denominador
+
                     status = loja["dias"].get(dia_str, "")
 
+                    # Regras já existentes: domingo não conta (a menos que Finalizado)
                     if calendar.weekday(ano, mes_num, d) == 6 and status != "Finalizado":
                         continue
-
                     if status == "Domingo":
                         continue
 
                     dias_validos.append(d)
-
                     if status == "Finalizado":
                         dias_finalizados.append(d)
 
                 perc = (len(dias_finalizados) / len(dias_validos)) * 100 if dias_validos else 0.0
                 total_finalizados += len(dias_finalizados)
                 total_dias_validos += len(dias_validos)
+
                 linhas_texto.append(
                     f"Loja {loja['loja']}: {len(dias_finalizados)} de {len(dias_validos)} dias — {perc:.1f}% Finalizado"
                 )
 
+            # Montagem visual (duas colunas, como estava)
             resumo_final = ""
             if total_dias_validos:
                 geral = (total_finalizados / total_dias_validos) * 100
@@ -1114,7 +2730,7 @@ class ControleLojas(tk.Frame):
                 if resumo_final:
                     tk.Label(
                         quadro_resultados, text=resumo_final,
-                        font=("Segoe UI", 11, "bold"), bg=BG_DARK, fg=FG_TEXT,
+                        font=("Segoe UI", 10, "bold"), bg=BG_DARK, fg=FG_TEXT,
                         justify="left", anchor="w"
                     ).pack(anchor="w", pady=(6, 0))
                 return
@@ -1139,75 +2755,10 @@ class ControleLojas(tk.Frame):
             if resumo_final:
                 tk.Label(
                     quadro_resultados, text=resumo_final,
-                    font=("Segoe UI", 11, "bold"), bg=BG_DARK, fg=FG_TEXT,
+                    font=("Segoe UI", 8, "bold"), bg=BG_DARK, fg=FG_TEXT,
                     wraplength=480, justify="left", anchor="w"
                 ).pack(anchor="w", pady=(8, 0))
 
-                return
-
-            import math
-            itens_por_coluna = math.ceil(n / 2)
-
-            cols_frame = tk.Frame(quadro_resultados, bg=BG_DARK)
-            cols_frame.pack(fill="x", expand=False, anchor="w")
-
-            col_esq = tk.Frame(cols_frame, bg=BG_DARK)
-            col_esq.grid(row=0, column=0, sticky="nw", padx=(0, 24))  # espaçamento entre colunas
-
-            col_dir = tk.Frame(cols_frame, bg=BG_DARK)
-            col_dir.grid(row=0, column=1, sticky="nw")
-
-            for i in range(itens_por_coluna):
-                tk.Label(
-                    col_esq, text=linhas_texto[i],
-                    bg=BG_DARK, fg=FG_TEXT, anchor="w", justify="left"
-                ).pack(anchor="w")
-
-            for i in range(itens_por_coluna, n):
-                tk.Label(
-                    col_dir, text=linhas_texto[i],
-                    bg=BG_DARK, fg=FG_TEXT, anchor="w", justify="left"
-                ).pack(anchor="w")
-
-            if resumo_final:
-                tk.Label(
-                    quadro_resultados, text=resumo_final,
-                    font=("Segoe UI", 11, "bold"), bg=BG_DARK, fg=FG_TEXT,
-                    wraplength=480, justify="left", anchor="w"
-                ).pack(anchor="w", pady=(6, 0))
-
-                return
-
-            import math
-            itens_por_coluna = math.ceil(n / 2)
-
-            cols_frame = tk.Frame(quadro_resultados, bg=BG_DARK)
-            cols_frame.pack(fill="x", expand=False, anchor="w")
-
-            col_esq = tk.Frame(cols_frame, bg=BG_DARK)
-            col_esq.grid(row=0, column=0, sticky="nw", padx=(0, 24))
-
-            col_dir = tk.Frame(cols_frame, bg=BG_DARK)
-            col_dir.grid(row=0, column=1, sticky="nw")
-
-            for i in range(itens_por_coluna):
-                tk.Label(
-                    col_esq, text=linhas_texto[i],
-                    bg=BG_DARK, fg=FG_TEXT, anchor="w", justify="left"
-                ).pack(anchor="w")
-
-            for i in range(itens_por_coluna, n):
-                tk.Label(
-                    col_dir, text=linhas_texto[i],
-                    bg=BG_DARK, fg=FG_TEXT, anchor="w", justify="left"
-                ).pack(anchor="w")
-
-            if resumo_final:
-                tk.Label(
-                    quadro_resultados, text=resumo_final,
-                    font=("Segoe UI", 11, "bold"), bg=BG_DARK, fg=FG_TEXT,
-                    wraplength=480, justify="left", anchor="w" 
-                ).pack(anchor="w", pady=(8, 0))
 
         atualizar_quadro_resultados()
 
@@ -1258,15 +2809,15 @@ class ControleLojas(tk.Frame):
         loja["meta"][dia]["finalizado_ts"]
         loja["meta"][dia]["logs"]
 
-        Ignora GoodCard +7 (auto_goodcard=True).
+        IGNORA GoodCard +7 (auto_goodcard=True)
 
-        Retorna tudo em %.
+        >>> NOVO: respeita a vigência por loja no perfil (self._dia_dentro_vigencia),
+            para não penalizar auditores após troca de loja.
         """
+        from datetime import datetime
+        import calendar
 
-        from datetime import datetime, timedelta
-
-        # Se não houver nada
-
+        # Se não houver planilha, retorna tudo zerado
         if "planilha" not in perfil:
             return {
                 "sem_pend_dentro": 0,
@@ -1280,53 +2831,61 @@ class ControleLojas(tk.Frame):
         ano = int(ano_str)
         mes_num = MESES_PTBR.index(mes_nome) + 1
         dias_mes = calendar.monthrange(ano, mes_num)[1]
+
         PRAZO = getattr(self, "PRAZO_FINALIZACAO_DIAS", 2)
 
         # Contadores
         tot_finalizados = 0
         c_sem_pend_dentro = 0
-        c_sem_pend_fora   = 0
+        c_sem_pend_fora = 0
         c_com_pend_dentro = 0
-        c_com_pend_fora   = 0
+        c_com_pend_fora = 0
 
-
+        def ts_parse(x):
+            try:
+                return datetime.strptime(x["data_hora"], "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                return datetime.now()
 
         for loja in perfil["planilha"]:
-            for d in range(1, dias_mes + 1):
-                dia = str(d)
-                status_final = loja["dias"].get(dia, "")
+            dias_loja = loja.get("dias", {})
+            meta_loja = loja.get("meta", {})
 
-                # Domingos não contam, a menos que estejam Finalizados
+            for d in range(1, dias_mes + 1):
+                dia_str = str(d)
+
+                # >>> BLOQUEIO POR VIGÊNCIA (NOVIDADE)
+                if not self._dia_dentro_vigencia(loja, d, dias_mes):
+                    continue
+
+                status_final = dias_loja.get(dia_str, "")
+
+                # Ignorar domingos não finalizados
                 if calendar.weekday(ano, mes_num, d) == 6 and status_final != "Finalizado":
                     continue
                 if status_final == "Domingo":
                     continue
 
-                meta_dia = loja.get("meta", {}).get(dia, {})
+                meta_dia = meta_loja.get(dia_str, {})
                 logs = meta_dia.get("logs", [])
 
-                # Apenas logs manuais
+                # Apenas logs manuais contam para primeira ação
                 logs_manuais = [l for l in logs if l.get("origem") == "manual"]
-
-                def ts_parse(x):
-                    try:
-                        return datetime.strptime(x["data_hora"], "%Y-%m-%d %H:%M:%S")
-                    except Exception:
-                        return datetime.now()
+                logs_manuais.sort(key=ts_parse)
 
                 primeira_ts, primeira_status = None, ""
                 if logs_manuais:
-                    logs_manuais.sort(key=ts_parse)
-                    primeira = logs_manuais[0]
-                    primeira_ts = ts_parse(primeira)
-                    primeira_status = primeira.get("status", "")
+                    primeira_log = logs_manuais[0]
+                    primeira_ts = ts_parse(primeira_log)
+                    primeira_status = primeira_log.get("status", "")
 
-                # Limite do prazo
-                data_base = datetime(ano, mes_num, int(dia))
-                limite = self.somar_dias_ignorando_domingo(data_base, PRAZO)
-                limite = limite.replace(hour=23, minute=59, second=59, microsecond=999999)
+                # Cálculo do limite do prazo (D + PRAZO ignorando domingos)
+                base = datetime(ano, mes_num, d)
+                limite = self.somar_dias_ignorando_domingo(base, PRAZO).replace(
+                    hour=23, minute=59, second=59, microsecond=999999
+                )
 
-                # Finalizado?
+                # Determinar se o dia finalizou
                 finalizado_ts = None
                 if status_final == "Finalizado":
                     ts_text = meta_dia.get("finalizado_ts")
@@ -1336,11 +2895,11 @@ class ControleLojas(tk.Frame):
                         except Exception:
                             finalizado_ts = None
 
-                # Se não finalizou, não entra na quebra 4x (denominador = finalizados)
+                # Se não finalizou → não entra no denominador
                 if finalizado_ts is None:
                     continue
 
-                # Houve alguma pendência (manual) ANTES do limite?
+                # Houve pendência manual ANTES do limite?
                 houve_pendencia_previa = False
                 for l in logs_manuais:
                     st = l.get("status", "")
@@ -1349,16 +2908,17 @@ class ControleLojas(tk.Frame):
                             houve_pendencia_previa = True
                             break
 
-                # Classificação
                 tot_finalizados += 1
+
+                # SEM pendência
                 if not houve_pendencia_previa and primeira_status == "Finalizado":
-                    # Sem pendência
                     if primeira_ts and primeira_ts <= limite:
                         c_sem_pend_dentro += 1
                     else:
                         c_sem_pend_fora += 1
+
+                # COM pendência
                 else:
-                    # Com pendência
                     if finalizado_ts <= limite:
                         c_com_pend_dentro += 1
                     else:
@@ -1369,10 +2929,11 @@ class ControleLojas(tk.Frame):
 
         return {
             "sem_pend_dentro": pct(c_sem_pend_dentro),
-            "sem_pend_fora":   pct(c_sem_pend_fora),
+            "sem_pend_fora": pct(c_sem_pend_fora),
             "com_pend_dentro": pct(c_com_pend_dentro),
-            "com_pend_fora":   pct(c_com_pend_fora),
+            "com_pend_fora": pct(c_com_pend_fora),
         }
+
 
     def atualizar_cards_resultados(self, perfil, janela=None):
         """
@@ -1493,13 +3054,14 @@ class ControleLojas(tk.Frame):
         """
         Replica a lógica de calcular_metricas_resultados, mas retornando CONTAGENS,
         para podermos agregar entre vários perfis (resultado mensal).
-        Retorna (tot_finalizados, c_sem_pend_dentro, c_sem_pend_fora, c_com_pend_dentro, c_com_pend_fora).
+        ► NOVO: respeita a vigência por loja no perfil (self._dia_dentro_vigencia).
+        Retorna (tot_finalizados, c_sem_pend_dentro, c_sem_pend_fora,
+                c_com_pend_dentro, c_com_pend_fora, total_dias_validos).
         """
         from datetime import datetime
         import calendar
-
         if "planilha" not in perfil:
-            return (0, 0, 0, 0, 0)
+            return (0, 0, 0, 0, 0, 0)
 
         # Contexto do mês (formato "Mês/Ano", ex.: "Junho/2025")
         try:
@@ -1507,7 +3069,7 @@ class ControleLojas(tk.Frame):
             ano = int(ano_str)
             mes_num = MESES_PTBR.index(mes_nome) + 1
         except Exception:
-            return (0, 0, 0, 0, 0)
+            return (0, 0, 0, 0, 0, 0)
 
         dias_mes = calendar.monthrange(ano, mes_num)[1]
         PRAZO = getattr(self, "PRAZO_FINALIZACAO_DIAS", 2)
@@ -1515,6 +3077,7 @@ class ControleLojas(tk.Frame):
         tot_finalizados = 0
         c_sem_pend_dentro = c_sem_pend_fora = 0
         c_com_pend_dentro = c_com_pend_fora = 0
+        total_dias_validos = 0  # << NOVO: denominador agregado
 
         def ts_parse(x):
             try:
@@ -1525,13 +3088,21 @@ class ControleLojas(tk.Frame):
         for loja in perfil.get("planilha", []):
             for d in range(1, dias_mes + 1):
                 dia = str(d)
+
+                # ► NOVO: respeitar vigência
+                if not self._dia_dentro_vigencia(loja, d, dias_mes):
+                    continue
+
                 status_final = loja.get("dias", {}).get(dia, "")
 
-                # Domingos não contam, a menos que estejam "Finalizado"
+                # Domingos não contam, a menos que estejam Finalizados
                 if calendar.weekday(ano, mes_num, d) == 6 and status_final != "Finalizado":
                     continue
                 if status_final == "Domingo":
                     continue
+
+                # ► NOVO: este dia conta no denominador (válido)
+                total_dias_validos += 1
 
                 meta_dia = loja.get("meta", {}).get(dia, {})
                 logs = meta_dia.get("logs", [])
@@ -1560,7 +3131,8 @@ class ControleLojas(tk.Frame):
                             finalizado_ts = datetime.strptime(ts_text, "%Y-%m-%d %H:%M:%S")
                         except Exception:
                             finalizado_ts = None
-                # Não finalizou -> não entra no denominador
+
+                # Não finalizou → não entra no denominador de “finalizados”
                 if finalizado_ts is None:
                     continue
 
@@ -1573,6 +3145,7 @@ class ControleLojas(tk.Frame):
                         break
 
                 tot_finalizados += 1
+
                 if not houve_pendencia_previa and primeira_status == "Finalizado":
                     # Sem pendência
                     if primeira_ts and primeira_ts <= limite:
@@ -1586,21 +3159,25 @@ class ControleLojas(tk.Frame):
                     else:
                         c_com_pend_fora += 1
 
-        return (tot_finalizados, c_sem_pend_dentro, c_sem_pend_fora, c_com_pend_dentro, c_com_pend_fora)
-
+        return (tot_finalizados, c_sem_pend_dentro, c_sem_pend_fora,
+                c_com_pend_dentro, c_com_pend_fora, total_dias_validos)
 
     def calcular_metricas_resultados_aggregadas(self, perfis_docs):
         """
         Soma as contagens em vários perfis e retorna percentuais agregados.
+        ► NOVO: agrega total_dias_validos (denominador) e calcula pct_finalizados_geral.
         """
         tot = spd = spf = cpd = cpf = 0
+        total_dias_validos = 0  # << NOVO
+
         for p in (perfis_docs or []):
-            t, a, b, c, d = self._contar_metricas_por_perfil(p)
+            t, a, b, c, d, denom = self._contar_metricas_por_perfil(p)  # << NOVO
             tot += t
             spd += a
             spf += b
             cpd += c
             cpf += d
+            total_dias_validos += denom  # << NOVO
 
         def pct(v):
             return 0 if tot == 0 else round((v / tot) * 100)
@@ -1611,6 +3188,9 @@ class ControleLojas(tk.Frame):
             "com_pend_dentro": pct(cpd),
             "com_pend_fora": pct(cpf),
             "base_finalizados": tot,
+            "total_dias_validos": total_dias_validos,                            # << NOVO
+            "pct_finalizados_geral": (0 if total_dias_validos == 0              # << NOVO
+                                    else round((tot/total_dias_validos)*100))
         }
 
 
@@ -1745,7 +3325,7 @@ class ControleLojas(tk.Frame):
 
         info_lbl = tk.Label(top, text="", bg=BG_DARK, fg="#b0b0b0", font=FONT_UI)
         info_lbl.pack(side="left", padx=10)
-
+    
         # ===== Área rolável com seções por regional =====
 
         # ===== Área fixa (sem scroll) com grade 4 colunas =====
@@ -1911,8 +3491,24 @@ class ControleLojas(tk.Frame):
 
 
 
+
         # primeira renderização
         render()
+    
+        footer = tk.Frame(win, bg=BG_DARK)
+        footer.pack(fill="x", padx=14, pady=(8, 14))  # leve espaço após o grid
+
+
+        btn_viz = tk.Button(
+            footer,
+            text="Visualização (Minhas Lojas do mês)",
+            command=abrir_visualizacao_minhas,   # função definida dentro do mesmo método
+            font=FONT_UI,
+            bg="#007acc", fg=FG_TEXT,
+            activebackground="#3399ff", activeforeground="#ffffff",
+            relief="flat", bd=0, padx=12, pady=10
+        )
+        btn_viz.pack(fill="x")
 
 
     def abrir_avaliacao_lojas(self):
@@ -2106,71 +3702,89 @@ class ControleLojas(tk.Frame):
         render()
 
 
-
     def abrir_resultado_mensal(self):
         """
-        Resultado Mensal com:
-        - Visão GERAL no topo (todos os perfis do mês/ano).
-        - Seletor de USUÁRIO abaixo, exibindo os cards somente daquele usuário
-        (sem alterar a visão geral).
-        Observação: para usuários não-admin verem o geral, a política/RLS do Supabase
-        precisa permitir SELECT em todos os perfis do mês/ano. Caso contrário, o
-        geral poderá retornar vazio pelo banco.
+        Abre janela com duas abas:
+        1) Resultado Mensal (cards) — visão geral + seleção por usuário.
+        2) Análise Gráfica (visão anual) — barras empilhadas 100% (12 meses).
+        Observa regras de acesso iguais às já usadas no app.
         """
         import tkinter as tk
         from tkinter import ttk, messagebox
         from datetime import datetime
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        import numpy as np
 
+        # -------- janela (Toplevel) --------
         win = tk.Toplevel(self.master)
         win.title("Resultado Mensal")
         win.configure(bg=BG_DARK)
         win.state("zoomed")
 
-        # Cabeçalho
+        # Título geral da janela
         tk.Label(
-            win,
-            text="📊 Resultado Mensal",
-            font=("Segoe UI", 14, "bold"),
-            bg=BG_DARK, fg=FG_TEXT
+            win, text="📊 Resultado Mensal",
+            font=("Segoe UI", 14, "bold"), bg=BG_DARK, fg=FG_TEXT
         ).pack(pady=(10, 6))
 
-        # Barra de filtros (Mês/Ano)
-        top = tk.Frame(win, bg=BG_DARK)
-        top.pack(fill="x", padx=20, pady=(0, 10))
+        # -------- Notebook (abas) --------
+        # Estilo dark para abas
+        style = ttk.Style()
+        try:
+            style.theme_use("default")
+        except Exception:
+            pass
+        style.configure("TNotebook", background=BG_DARK, borderwidth=0)
+        style.configure("TNotebook.Tab", background=BG_Panel, foreground=FG_TEXT) if False else style.configure("TNotebook.Tab", background=BG_PANEL, foreground=FG_TEXT)
+        style.map("TNotebook.Tab",
+                background=[("selected", "#444444")],
+                foreground=[("selected", FG_TEXT)])
+        notebook = ttk.Notebook(win)
+        notebook.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+
+        # === ABA 1: RESULTADO MENSAL ==================================================
+        tab_rm = tk.Frame(notebook, bg=BG_DARK)
+        notebook.add(tab_rm, text="Análise Geral")
+
+        # Barra de filtros (Mês/Ano) da aba Resultado Mensal
+        top_rm = tk.Frame(tab_rm, bg=BG_DARK)
+        top_rm.pack(fill="x", padx=20, pady=(8, 10))
 
         ano_atual = datetime.now().year
         anos = [str(a) for a in range(ano_atual - 2, ano_atual + 3)]
         mes_atual_nome = MESES_PTBR[datetime.now().month - 1]
 
+        tk.Label(top_rm, text="Mês:", bg=BG_DARK, fg=FG_TEXT, font=FONT_UI).pack(side="left")
         mes_var = tk.StringVar(value=mes_atual_nome)
-        ano_var = tk.StringVar(value=str(ano_atual))
-
-        tk.Label(top, text="Mês:", bg=BG_DARK, fg=FG_TEXT, font=FONT_UI).pack(side="left")
-        mes_menu = tk.OptionMenu(top, mes_var, *MESES_PTBR)
+        mes_menu = tk.OptionMenu(top_rm, mes_var, *MESES_PTBR)
         mes_menu.configure(bg=BG_PANEL, fg=FG_TEXT, activebackground="#444444",
                         activeforeground=FG_TEXT, relief="flat")
         mes_menu.pack(side="left", padx=(6, 16))
 
-        tk.Label(top, text="Ano:", bg=BG_DARK, fg=FG_TEXT, font=FONT_UI).pack(side="left")
-        ano_menu = tk.OptionMenu(top, ano_var, *anos)
+        tk.Label(top_rm, text="Ano:", bg=BG_DARK, fg=FG_TEXT, font=FONT_UI).pack(side="left")
+        ano_var = tk.StringVar(value=str(ano_atual))
+        ano_menu = tk.OptionMenu(top_rm, ano_var, *anos)
         ano_menu.configure(bg=BG_PANEL, fg=FG_TEXT, activebackground="#444444",
                         activeforeground=FG_TEXT, relief="flat")
         ano_menu.pack(side="left", padx=(6, 16))
 
-        info_lbl_geral = tk.Label(top, text="", bg=BG_DARK, fg="#b0b0b0", font=FONT_UI)
+        info_lbl_geral = tk.Label(top_rm, text="", bg=BG_DARK, fg="#b0b0b0", font=FONT_UI)
         info_lbl_geral.pack(side="left", padx=10)
 
-        # --- Título da seção GERAL ---
+        # --- CONTEXTO DE SESSÃO ---
+        username_atual = (self.current_user or {}).get("username", "") or ""
+        role_atual = (self.current_user or {}).get("role", "") or ""
+
+        # Título da seção GERAL
         tk.Label(
-            win, text="Geral (todos os perfis do mês/ano)",
-            font=("Segoe UI", 12, "bold"),
-            bg=BG_DARK, fg=FG_TEXT
+            tab_rm, text="Geral (todos os perfis do mês/ano)",
+            font=("Segoe UI", 12, "bold"), bg=BG_DARK, fg=FG_TEXT
         ).pack(anchor="w", padx=20, pady=(4, 0))
 
         # Grid de cards (GERAL)
-        grid_geral = tk.Frame(win, bg=BG_DARK)
+        grid_geral = tk.Frame(tab_rm, bg=BG_DARK)
         grid_geral.pack(anchor="n")
-
         def make_card(parent, titulo, cor_borda="#444444", valor_placeholder="--", dica=""):
             card = tk.Frame(parent, bg=BG_DARK, highlightbackground=cor_borda, highlightthickness=1, bd=0)
             card.configure(width=320, height=120)
@@ -2181,7 +3795,7 @@ class ControleLojas(tk.Frame):
             lbl_val.pack(anchor="w", padx=12, pady=(2, 2))
             if dica:
                 tk.Label(card, text=dica, font=("Segoe UI", 9), bg=BG_DARK, fg="#b0b0b0", wraplength=280, justify="left")\
-                .pack(anchor="w", padx=12, pady=(0, 10))
+                    .pack(anchor="w", padx=12, pady=(0, 10))
             return card, lbl_val
 
         for c in range(2):
@@ -2192,21 +3806,18 @@ class ControleLojas(tk.Frame):
         g1, g1_lbl = make_card(grid_geral, "Sem pendência (dentro do prazo)", cor_borda="#2b5c7a",
                             dica="Primeira ação = Finalizado, dentro do limite.")
         g1.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-
         g2, g2_lbl = make_card(grid_geral, "Sem pendência (fora do prazo)", cor_borda="#7a2b2b",
                             dica="Primeira ação = Finalizado, porém após o limite.")
         g2.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
-
         g3, g3_lbl = make_card(grid_geral, "Com pendência (dentro do prazo)", cor_borda="#2f6f3e",
                             dica="Houve pendência e a finalização ocorreu no prazo.")
         g3.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
-
         g4, g4_lbl = make_card(grid_geral, "Com pendência (fora do prazo)", cor_borda="#7a5c2b",
                             dica="Houve pendência e a finalização ocorreu após o limite.")
         g4.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
 
         # --- Seção POR USUÁRIO ---
-        area_user = tk.Frame(win, bg=BG_DARK)
+        area_user = tk.Frame(tab_rm, bg=BG_DARK)
         area_user.pack(fill="x", padx=20, pady=(8, 0))
 
         tk.Label(
@@ -2214,23 +3825,17 @@ class ControleLojas(tk.Frame):
             font=("Segoe UI", 12, "bold"), bg=BG_DARK, fg=FG_TEXT
         ).grid(row=0, column=0, sticky="w", pady=(0, 4))
 
-        user_line = tk.Frame(area_user, bg=BG_DARK)
-        user_line.grid(row=1, column=0, sticky="w")
-
-        tk.Label(user_line, text="Usuário:", bg=BG_DARK, fg=FG_TEXT, font=FONT_UI)\
-            .pack(side="left", padx=(0, 6))
-
+        user_line = tk.Frame(area_user, bg=BG_DARK); user_line.grid(row=1, column=0, sticky="w")
+        tk.Label(user_line, text="Usuário:", bg=BG_DARK, fg=FG_TEXT, font=FONT_UI).pack(side="left", padx=(0, 6))
         user_var = tk.StringVar(value="(selecione)")
         user_combo = ttk.Combobox(user_line, textvariable=user_var, state="readonly", width=28)
         user_combo.pack(side="left")
-
         info_lbl_user = tk.Label(user_line, text="", bg=BG_DARK, fg="#b0b0b0", font=FONT_UI)
         info_lbl_user.pack(side="left", padx=12)
 
         # Grid de cards (POR USUÁRIO)
-        grid_user = tk.Frame(win, bg=BG_DARK)
+        grid_user = tk.Frame(tab_rm, bg=BG_DARK)
         grid_user.pack(anchor="n", pady=(6, 0))
-
         for c in range(2):
             grid_user.grid_columnconfigure(c, weight=1, pad=12)
         for r in range(2):
@@ -2245,13 +3850,10 @@ class ControleLojas(tk.Frame):
         u4, u4_lbl = make_card(grid_user, "Com pendência (fora do prazo)", cor_borda="#7a5c2b")
         u4.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
 
-        # Rodapé
-        rodape = tk.Frame(win, bg=BG_DARK)
-        rodape.pack(side="bottom", fill="x", pady=16)
-        
-
+        # Rodapé Aba 1
+        rodape_rm = tk.Frame(tab_rm, bg=BG_DARK); rodape_rm.pack(side="bottom", fill="x", pady=16)
         tk.Button(
-            rodape, text="Fechar", command=win.destroy,
+            rodape_rm, text="Fechar", command=win.destroy,
             font=FONT_UI, bg=BG_PANEL, fg=FG_TEXT, relief="flat", padx=12, pady=8
         ).pack(side="right", padx=8)
 
@@ -2261,23 +3863,36 @@ class ControleLojas(tk.Frame):
             except Exception:
                 return "0%"
 
-        # estado local para manter o resultado da última consulta do banco
-        state = {"rows": [], "usuarios": []}
+        # Estado local dessa aba
+        state_rm = {"rows": [], "usuarios": []}
 
+        # Helpers de atualização (Aba Resultado Mensal)
         def atualizar_cards_geral(perfis_docs, mes_full):
             metr = self.calcular_metricas_resultados_aggregadas(perfis_docs)
             g1_lbl.configure(text=_fmt(metr.get("sem_pend_dentro", 0)))
             g2_lbl.configure(text=_fmt(metr.get("sem_pend_fora", 0)))
             g3_lbl.configure(text=_fmt(metr.get("com_pend_dentro", 0)))
             g4_lbl.configure(text=_fmt(metr.get("com_pend_fora", 0)))
+
+            base = int(metr.get("base_finalizados", 0))
+            denom = int(metr.get("total_dias_validos", 0))
+            pctf = int(metr.get("pct_finalizados_geral", 0))
             info_lbl_geral.configure(
-                text=f"Mês/Ano: {mes_full} • Perfis agregados: {len(perfis_docs)} • Dias finalizados (base): {metr.get('base_finalizados', 0)}"
+                text=f"Mês/Ano: {mes_full} • Perfis agregados: {len(perfis_docs)} • "
+                    f"Dias finalizados (base): {base} • "
+                    f"% finalizados: {pctf}% ( {base}/{denom} )"
             )
 
         def atualizar_cards_usuario(username_selecionado):
-            # filtra perfis do usuário
+            # restrição: não-admin só pode ver o próprio
+            if role_atual != "admin" and username_selecionado not in ("", "(selecione)"):
+                if username_selecionado != username_atual:
+                    for lbl in (u1_lbl, u2_lbl, u3_lbl, u4_lbl):
+                        lbl.configure(text="--")
+                    info_lbl_user.configure(text="Acesso negado: você só pode ver seus próprios resultados.")
+                    return
+
             if not username_selecionado or username_selecionado == "(selecione)":
-                # limpa cards do usuário
                 for lbl in (u1_lbl, u2_lbl, u3_lbl, u4_lbl):
                     lbl.configure(text="--")
                 info_lbl_user.configure(text="Selecione um usuário para ver os resultados.")
@@ -2285,7 +3900,7 @@ class ControleLojas(tk.Frame):
 
             perfis_user = [
                 (row.get("doc") or {})
-                for row in state["rows"]
+                for row in state_rm["rows"]
                 if (row.get("usuario_dono") or "") == username_selecionado
             ]
             metr = self.calcular_metricas_resultados_aggregadas(perfis_user)
@@ -2293,14 +3908,18 @@ class ControleLojas(tk.Frame):
             u2_lbl.configure(text=_fmt(metr.get("sem_pend_fora", 0)))
             u3_lbl.configure(text=_fmt(metr.get("com_pend_dentro", 0)))
             u4_lbl.configure(text=_fmt(metr.get("com_pend_fora", 0)))
+
+            base = int(metr.get("base_finalizados", 0))
+            denom = int(metr.get("total_dias_validos", 0))
+            pctf = int(metr.get("pct_finalizados_geral", 0))
             info_lbl_user.configure(
-                text=f"Usuário: {username_selecionado} • Perfis agregados: {len(perfis_user)} • Dias finalizados (base): {metr.get('base_finalizados', 0)}"
+                text=f"Usuário: {username_selecionado} • Perfis agregados: {len(perfis_user)} • "
+                    f"Dias finalizados (base): {base} • "
+                    f"% finalizados: {pctf}% ( {base}/{denom} )"
             )
 
-        def recarregar(*_):
+        def recarregar_rm(*_):
             mes_full = f"{mes_var.get()}/{ano_var.get()}"
-
-            # 1) Consulta TODOS os perfis do mês/ano (sem filtrar por role)
             try:
                 q = supabase.table("perfis").select("doc,mes,usuario_dono").eq("mes", mes_full)
                 res = q.execute()
@@ -2309,40 +3928,214 @@ class ControleLojas(tk.Frame):
                 messagebox.showerror("Resultado Mensal", f"Falha ao consultar perfis do banco:\n{e}")
                 rows = []
 
-            state["rows"] = rows
-
-            # 2) Atualiza cards GERAIS (todos os perfis do mês/ano)
+            state_rm["rows"] = rows
             perfis_docs_geral = [r.get("doc") for r in rows if isinstance(r.get("doc"), dict)]
             atualizar_cards_geral(perfis_docs_geral, mes_full)
 
-            # 3) Monta a lista de usuários e atualiza a combobox
-            usuarios = sorted({(r.get("usuario_dono") or "") for r in rows if r.get("usuario_dono")})
-            state["usuarios"] = usuarios
-
-            # Atualiza items da combobox
-            user_combo["values"] = ["(selecione)"] + usuarios
-            # Se o usuário atualmente selecionado não existe mais, limpa
-            if user_var.get() not in user_combo["values"]:
+            todos_usuarios = sorted({(r.get("usuario_dono") or "") for r in rows if r.get("usuario_dono")})
+            if role_atual == "admin":
+                usuarios = todos_usuarios
+                user_combo["values"] = ["(selecione)"] + usuarios
+                info_lbl_user.configure(text="(Selecione um usuário para ver os resultados individuais)")
                 user_var.set("(selecione)")
-            # Atualiza cards do usuário selecionado (se houver)
-            atualizar_cards_usuario(user_var.get())
+                user_combo.configure(state="readonly")
+            else:
+                usuarios = [u for u in todos_usuarios if u == username_atual]
+                user_combo["values"] = usuarios if usuarios else ["(selecione)"]
+                if usuarios:
+                    user_var.set(username_atual)
+                    user_combo.configure(state="disabled")
+                    info_lbl_user.configure(text="(Somente seus próprios resultados)")
+                    atualizar_cards_usuario(username_atual)
+                else:
+                    user_var.set("(selecione)")
+                    for lbl in (u1_lbl, u2_lbl, u3_lbl, u4_lbl):
+                        lbl.configure(text="--")
+                    info_lbl_user.configure(text="Nenhum perfil seu encontrado para este mês/ano.")
 
             if not rows:
                 messagebox.showinfo("Resultado Mensal", "Nenhum perfil encontrado para o mês/ano selecionados.")
 
-        # bindings
-
         def _on_mes_ano_change(*_):
-            recarregar()
+            recarregar_rm()
 
-        # quando o valor da variável mudar, recarrega
         mes_var.trace_add("write", _on_mes_ano_change)
         ano_var.trace_add("write", _on_mes_ano_change)
-
         user_combo.bind("<<ComboboxSelected>>", lambda e: atualizar_cards_usuario(user_var.get()))
 
-        # primeira carga
-        recarregar()
+        # Primeira carga da Aba 1
+        recarregar_rm()
+
+        # === ABA 2: ANÁLISE GRÁFICA (VISÃO ANUAL) ====================================
+        tab_ag = tk.Frame(notebook, bg=BG_DARK)
+        notebook.add(tab_ag, text="Análise Gráfica")
+
+        # Barra de controle (Ano) — independente da Aba 1
+        top_ag = tk.Frame(tab_ag, bg=BG_DARK)
+        top_ag.pack(fill="x", padx=20, pady=(8, 10))
+
+        tk.Label(top_ag, text="Ano:", bg=BG_DARK, fg=FG_TEXT, font=FONT_UI).pack(side="left")
+        ano_ag_var = tk.StringVar(value=str(datetime.now().year))
+        ano_menu_ag = tk.OptionMenu(top_ag, ano_ag_var, *anos)
+        ano_menu_ag.configure(bg=BG_PANEL, fg=FG_TEXT, activebackground="#444444",
+                            activeforeground=FG_TEXT, relief="flat")
+        ano_menu_ag.pack(side="left", padx=(6, 16))
+
+        info_lbl_ag = tk.Label(top_ag, text="", bg=BG_DARK, fg="#b0b0b0", font=FONT_UI)
+        info_lbl_ag.pack(side="left", padx=10)
+
+        # Área de gráficos (dois blocos)
+        area_ag = tk.Frame(tab_ag, bg=BG_DARK)
+        area_ag.pack(fill="both", expand=True, padx=20, pady=(0, 12))
+
+        # --- Bloco GERAL (título + gráfico) ---
+        bloco_g = tk.Frame(area_ag, bg=BG_DARK); bloco_g.pack(fill="both", expand=True, pady=(2, 10))
+        tk.Label(bloco_g, text="Geral — Percentual mensal (100%)",
+                font=("Segoe UI", 12, "bold"), bg=BG_DARK, fg=FG_TEXT).pack(anchor="w")
+        fig_g = Figure(figsize=(12, 3.8), dpi=100)
+        ax_g = fig_g.add_subplot(111)
+        canvas_g = FigureCanvasTkAgg(fig_g, master=bloco_g)
+        cw_g = canvas_g.get_tk_widget(); cw_g.configure(bg=BG_DARK, highlightthickness=0)
+        cw_g.pack(fill="x", expand=False, pady=(2, 8))
+
+        # --- Bloco INDIVIDUAL (título + gráfico) ---
+        bloco_u = tk.Frame(area_ag, bg=BG_DARK); bloco_u.pack(fill="both", expand=True, pady=(6, 0))
+        tk.Label(bloco_u, text="Individual — Percentual mensal (100%)",
+                font=("Segoe UI", 12, "bold"), bg=BG_DARK, fg=FG_TEXT).pack(anchor="w")
+        fig_u = Figure(figsize=(12, 3.8), dpi=100)
+        ax_u = fig_u.add_subplot(111)
+        canvas_u = FigureCanvasTkAgg(fig_u, master=bloco_u)
+        cw_u = canvas_u.get_tk_widget(); cw_u.configure(bg=BG_DARK, highlightthickness=0)
+        cw_u.pack(fill="x", expand=False, pady=(2, 8))
+
+        # Rodapé da Aba 2 (apenas info/fechar na janela, botão fechar fica na Aba 1)
+        footer_ag = tk.Frame(tab_ag, bg=BG_DARK); footer_ag.pack(fill="x", pady=(0, 6))
+
+        # --- Helpers: consulta, cálculo e desenho para a ABA 2 ---
+        def mes_full(m, a): return f"{m}/{a}"
+        xlabels = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
+
+        def consultar_perfis_mes(mes_full_str: str):
+            try:
+                res = supabase.table("perfis").select("doc,mes,usuario_dono").eq("mes", mes_full_str).execute()
+                return res.data or []
+            except Exception as e:
+                messagebox.showerror("Análise Gráfica", f"Falha ao consultar {mes_full_str}:\n{e}")
+                return []
+
+        def metricas_por_mes(mes_full_str: str):
+            rows = consultar_perfis_mes(mes_full_str)
+            docs_geral = [r.get("doc") for r in rows if isinstance(r.get("doc"), dict)]
+            metr_geral = self.calcular_metricas_resultados_aggregadas(docs_geral)
+
+            # regra de acesso igual à Aba 1 (se admin, usa user_var; senão, username_atual)
+            if role_atual != "admin":
+                user_target = username_atual
+            else:
+                user_target = user_var.get() if user_var.get() not in ("", "(selecione)") else None
+
+            if user_target:
+                docs_user = [(r.get("doc") or {}) for r in rows if (r.get("usuario_dono") or "") == user_target]
+                metr_user = self.calcular_metricas_resultados_aggregadas(docs_user)
+            else:
+                metr_user = None
+            return metr_geral, metr_user
+
+        def desenhar(fig, ax, series, xlabels):
+            # cores das categorias (iguais aos cards)
+            C1 = "#2b5c7a"; C2 = "#7a2b2b"; C3 = "#2f6f3e"; C4 = "#7a5c2b"
+            # fundo e margens
+            fig.patch.set_facecolor(BG_DARK)
+            ax.set_facecolor(BG_DARK)
+            fig.subplots_adjust(top=0.86, bottom=0.28, left=0.06, right=0.985)
+            # dados
+            spd = series["sem_pend_dentro"]; spf = series["sem_pend_fora"]
+            cpd = series["com_pend_dentro"]; cpf = series["com_pend_fora"]
+            x = np.arange(len(xlabels))
+            ax.clear()
+            ax.bar(x, spd, color=C1, label="Sem pendência (dentro do prazo)")
+            ax.bar(x, spf, bottom=spd, color=C2, label="Sem pendência (fora do prazo)")
+            ax.bar(x, cpd, bottom=[a+b for a,b in zip(spd, spf)], color=C3, label="Com pendência (dentro do prazo)")
+            ax.bar(x, cpf, bottom=[a+b+c for a,b,c in zip(spd, spf, cpd)], color=C4, label="Com pendência (fora do prazo)")
+
+            # eixos e grade
+            ax.set_xticks(x); ax.set_xticklabels(xlabels, color=FG_TEXT)
+            ax.set_ylim(0, 100); ax.set_ylabel("%", color=FG_TEXT, fontsize=10)
+            ax.grid(axis="y", linestyle=":", alpha=0.35); ax.set_axisbelow(True)
+            for t in ax.get_yticklabels(): t.set_color(FG_TEXT)
+            for spine in ax.spines.values(): spine.set_color("#555555")
+
+            # legenda abaixo
+            leg = ax.legend(loc="upper center", ncol=4, frameon=False, bbox_to_anchor=(0.5, -0.22), fontsize=9)
+            for txt in leg.get_texts(): txt.set_color(FG_TEXT)
+
+            # 100% no topo
+            for xi in x:
+                ax.text(xi, 100.5, "100%", ha="center", va="bottom", color="#b0b0b0", fontsize=8)
+
+        def render_ag(*_):
+            try:
+                ano = int(ano_ag_var.get())
+            except Exception:
+                messagebox.showwarning("Análise Gráfica", "Selecione um ano válido.")
+                return
+
+            geral_spd, geral_spf, geral_cpd, geral_cpf = [], [], [], []
+            user_spd, user_spf, user_cpd, user_cpf = [], [], [], []
+            base_geral, base_user = 0, 0
+
+            for m_idx in range(12):
+                m_nome = MESES_PTBR[m_idx]
+                m_full = mes_full(m_nome, ano)
+                metr_g, metr_u = metricas_por_mes(m_full)
+
+                geral_spd.append(metr_g.get("sem_pend_dentro", 0))
+                geral_spf.append(metr_g.get("sem_pend_fora", 0))
+                geral_cpd.append(metr_g.get("com_pend_dentro", 0))
+                geral_cpf.append(metr_g.get("com_pend_fora", 0))
+                base_geral = metr_g.get("base_finalizados", 0)
+
+                if metr_u is not None:
+                    user_spd.append(metr_u.get("sem_pend_dentro", 0))
+                    user_spf.append(metr_u.get("sem_pend_fora", 0))
+                    user_cpd.append(metr_u.get("com_pend_dentro", 0))
+                    user_cpf.append(metr_u.get("com_pend_fora", 0))
+                    base_user = metr_u.get("base_finalizados", 0)
+                else:
+                    user_spd.append(0); user_spf.append(0); user_cpd.append(0); user_cpf.append(0)
+
+            # info
+            if role_atual == "admin":
+                ind_base_txt = base_user if user_var.get() not in ("", "(selecione)") else 0
+            else:
+                ind_base_txt = base_user
+            info_lbl_ag.configure(text=f"Ano: {ano} • Base (último mês consultado): Geral={base_geral} • Individual={ind_base_txt}")
+
+            # desenhar
+            desenhar(fig_g, ax_g, {
+                "sem_pend_dentro": geral_spd,
+                "sem_pend_fora": geral_spf,
+                "com_pend_dentro": geral_cpd,
+                "com_pend_fora": geral_cpf
+            }, xlabels)
+            canvas_g.draw()
+
+            desenhar(fig_u, ax_u, {
+                "sem_pend_dentro": user_spd,
+                "sem_pend_fora": user_spf,
+                "com_pend_dentro": user_cpd,
+                "com_pend_fora": user_cpf
+            }, xlabels)
+            canvas_u.draw()
+
+        # Binds da Aba 2
+        ano_ag_var.trace_add("write", render_ag)
+        # Quando o admin trocar de usuário na Aba 1, atualiza a Aba 2
+        user_var.trace_add("write", render_ag)
+
+        # Primeira renderização da Aba 2
+        render_ag()
+
 
 
     def abrir_resultados(self, perfil):
@@ -2697,7 +4490,7 @@ class ControleLojas(tk.Frame):
         canvas.pack(fill="both", expand=True, padx=20, pady=(0, 12))
         canvas.create_window((0, 0), window=frame_checks, anchor="nw")
         frame_checks.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
 
         selecoes = []
         lojas_atual = {l["loja"] for l in perfil["lojas"]}
@@ -2826,8 +4619,10 @@ class ControleLojas(tk.Frame):
                 activebackground="#444444", activeforeground=FG_ACTIVE,
                 relief="flat", bd=0, padx=12, pady=8).grid(row=0, column=1, padx=8)
                
+
     def _consolidar_perfil(self, perfil):
         import pandas as pd
+        import calendar
 
         # Extrai mês/ano e calcula número de dias
         mes_nome, ano_str = perfil["mes"].split("/")
@@ -2850,7 +4645,6 @@ class ControleLojas(tk.Frame):
         if "avaliacoes" not in perfil or perfil["avaliacoes"] is None:
             perfil["avaliacoes"] = []
         aval_por_loja = {a.get("loja"): a for a in perfil["avaliacoes"]}
-
         nome_auditor = perfil.get("nome", "")
         mes_perfil = perfil.get("mes", "")
 
@@ -2867,11 +4661,17 @@ class ControleLojas(tk.Frame):
             dias_validos, dias_finalizados = [], []
             for d in range(1, dias_mes + 1):
                 dia_str = str(d)
+
+                # >>> NOVO: respeitar vigência da loja neste perfil
+                if not self._dia_dentro_vigencia(loja, d, dias_mes):
+                    continue
+
                 status = loja["dias"].get(dia_str, "")
                 if calendar.weekday(ano, mes_num, d) == 6 and status != "Finalizado":
                     continue
                 if status == "Domingo":
                     continue
+
                 dias_validos.append(d)
                 if status == "Finalizado":
                     dias_finalizados.append(d)
@@ -2893,8 +4693,8 @@ class ControleLojas(tk.Frame):
 
             # Linha única por loja no perfil
             linha = {
-                "Perfil": nome_auditor,                           # auditor = nome do perfil
-                "Mês": mes_perfil,                                # mês do perfil
+                "Perfil": nome_auditor,  # auditor = nome do perfil
+                "Mês": mes_perfil,       # mês do perfil
                 "Loja": loja["loja"],
                 "CNPJ (últimos 4)": cnpj_ultimos4(loja["cnpj"]),
                 "Regional": regional_da_loja(loja["loja"]),
@@ -2917,6 +4717,7 @@ class ControleLojas(tk.Frame):
         }])
 
         return df_consolidado, df_resumo
+
 
     def exportar_todos_perfis_excel(self):
         import pandas as pd

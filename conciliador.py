@@ -1,1381 +1,1058 @@
+"""
+Conciliador CARTÕES — PMZ Peças e Pneus
+Relaciona vendas de cartão Débito/Crédito (Cupom Fiscal, Nota Fiscal, Recibos)
+com o extrato de Movimentação Cartões (XLSX Getnet/Santander — aba ANALITICO).
+"""
 
-import os
-import re
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import pandas as pd
-from PyPDF2 import PdfReader
+import pdfplumber
+import os, re
 
-# --------------------------
-# Helpers de parsing e normalização
-# --------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# CORES
+# ─────────────────────────────────────────────────────────────────────────────
+COR_BG        = "#1e1e2e"
+COR_PAINEL    = "#2a2a3e"
+COR_BORDA     = "#3a3a5c"
+COR_ACENTO    = "#7c6af7"
+COR_ACENTO2   = "#5a4fcf"
+COR_TEXTO     = "#e0e0f0"
+COR_TEXTO_SEC = "#9090b0"
+COR_VERDE     = "#2ecc71"
+COR_AMARELO   = "#f39c12"
+COR_VERMELHO  = "#e74c3c"
+COR_CINZA     = "#7f8c8d"
+COR_AZUL      = "#3498db"
+COR_ROXO      = "#9b59b6"
 
-def smart_to_float(x: object) -> float | None:
-    """Converte valores monetários com formato brasileiro/US para float."""
-    s = str(x)
-    s = re.sub(r"[^0-9,.\-]", "", s)
-    has_comma = "," in s
-    has_dot = "." in s
-    if has_comma and not has_dot:
-        s2 = s.replace(",", ".")
-    elif has_dot and not has_comma:
-        s2 = s
-    elif has_dot and has_comma:
-        # decide pelo último separador como decimal
-        if s.rfind(",") > s.rfind("."):
-            s2 = s.replace(".", "").replace(",", ".")
-        else:
-            s2 = s.replace(",", "")
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _num(val):
+    if val is None:
+        return 0.0
+    s = str(val).strip()
+    if re.search(r"\d\.\d{3},\d", s):
+        s = s.replace(".", "").replace(",", ".")
     else:
-        s2 = s
+        s = s.replace(",", ".")
+    s = re.sub(r"[^\d\.\-]", "", s)
     try:
-        return float(s2)
+        return float(s)
     except:
-        return None
-
-def classify_tipo_text(text: str) -> str | None:
-    t = text.lower()
-    if re.search(r"debito|débito", t):
-        return "Débito"
-    if re.search(r"credito|crédito", t):
-        return "Crédito"
-    return None
-
-# --------------------------
-# Parsing: CUPOM FISCAL (PDF)
-# --------------------------
+        return 0.0
 
 
-def parse_cupom_pdf(pdf_path: str) -> pd.DataFrame:
+def _extrair_linhas_pdf(path):
+    linhas = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            texto = page.extract_text(layout=True) or ""
+            for linha in texto.splitlines():
+                linhas.append(linha)
+    return linhas
+
+
+def _ultimo_num_linha(linha):
+    tokens = re.findall(r"\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2}|\d+", linha)
+    for tok in reversed(tokens):
+        n = _num(tok)
+        if n > 0:
+            return n
+    return 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PARSER: CUPOM FISCAL (PDF) — filtra VENDA A CARTAO DEBITO / CREDITO
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Prefixos de linhas de pagamento de cartão no cupom fiscal
+_GATILHOS_CARTAO_CUPOM = [
+    "VENDA A CARTAO DEBITO",
+    "VENDA A CARTAO DE CREDITO",
+]
+
+def ler_cupom_fiscal(path):
     """
-    Parser de CUPOM (ajustado para quebra de página):
-    - Mantém o bloco do cupom (current_cupom/in_block) atravessando rodapés/cabeçalhos de página.
-    - 'stop_totais_pat' agora só pega seções de TOTAIS reais, não o rodapé com endereço/email/CNPJ.
-    - Ignora cabeçalhos do relatório ("RELATORIO CUPOM FISCAL", "FILIAL :", "PERIODO :", "Emissao :", "Usuario/Horario :").
+    Lê o Relatório Cupom Fiscal (PDF).
+    Captura linhas com "VENDA A CARTAO DEBITO" ou "VENDA A CARTAO DE CREDITO".
+    Preserva contexto do cupom entre quebras de página.
     """
-    import re
-    from PyPDF2 import PdfReader
-    import pandas as pd
+    linhas = _extrair_linhas_pdf(path)
+    registros = []
 
-    rows = []
-    reader = PdfReader(pdf_path)
+    cupom_atual  = None
+    cond_atual   = ""
+    vender_atual = ""
 
-    # Cabeçalho do cupom (COO 3–6 dígitos, com/sem NORMAL)
-    header_pat = re.compile(
-        r"^\s*(\d{3,6})\s+\d{3,6}\s+\d{3}(?:\s+NORMAL\b)?",
-        re.IGNORECASE
-    )
+    for linha in linhas:
+        linha_strip = linha.strip()
+        if not linha_strip:
+            continue
+        up = linha_strip.upper()
 
-    # Linha informativa (opcional)
-    codpos_pat = re.compile(
-        r"^CODPOS\s+AUTORIZACAO\s+DOCUMENTO\s+(SITUACAO|STATUS)$",
-        re.IGNORECASE
-    )
+        # ── Linha principal do cupom ──────────────────────────────────────────
+        m = re.match(r"^(\d{5,})\s+\d{5,}\s+\d+\s+\w+\s+(\S+)\s+(\S+)", linha_strip)
+        if m:
+            cupom_atual  = m.group(1)
+            cond_atual   = m.group(2)
+            vender_atual = m.group(3)
+            continue
 
-    # Venda (crédito/débito) na mesma linha com valor
-    venda_pat = re.compile(
-        r"(?:VINCULADO\s+)?VENDA\s+A\s+CARTAO\s+(?:DE\s+)?(CREDITO|DEBITO)\s+([\d\.,]+)",
-        re.IGNORECASE
-    )
+        # ── Reset apenas em linhas de totais/seção — não em cabeçalho de página
+        if any(up.startswith(t) for t in ["TOTAL GERAL", "TOTAL :", "TOTAL:",
+                                           "DESCRICAO", "TOTAIS", "CANCELADOS",
+                                           "SERVICOS", "VENDAS"]):
+            cupom_atual = None
+            continue
 
-    # ===== NOVO: separar rodapé/cabeçalho de página do 'totais' real =====
-    # Cabeçalhos da página do relatório
-    page_header_pat = re.compile(
-        r"(?i)^(RELATORIO\s+CUPOM\s+FISCAL|FILIAL\s*:|PERIODO\s*:|Emissao\s*:|Usuario/Horario\s*:)"
-    )
-    # Rodapé com endereço/email/CNPJ/etc.
-    page_footer_pat = re.compile(
-        r"(?i)(RUA\s+PALMEIRA|C\.N\.P\.J|Email\s*:)"
-    )
-    # Totais/encerramentos reais do relatório (resumos)
-    stop_totais_pat = re.compile(
-        r"(?i)(DESCRICAO\s+TOTAIS|TOTAL\s+GERAL|TOTAIS\s+CUPOM|TOTAL\s+DIA|^TOTAL\b)"
-    )
-
-    current_cupom = None
-    in_block = False
-    seen_tuples = set()
-
-    def smart_to_float(x: object) -> float | None:
-        s = str(x)
-        s = re.sub(r"[^0-9,\.\-]", "", s)
-        has_comma = "," in s
-        has_dot = "." in s
-        if has_comma and not has_dot:
-            s2 = s.replace(",", ".")
-        elif has_dot and not has_comma:
-            s2 = s
-        elif has_dot and has_comma:
-            # decide pelo último separador como decimal
-            s2 = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")
-        else:
-            s2 = s
-        try:
-            return round(float(s2), 2)
-        except:
-            return None
-
-    for page in reader.pages:
-        text = page.extract_text() or ""
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
-
-        for ln in lines:
-            # 0) Ignorar cabeçalho/rodapé de página sem encerrar bloco
-            if page_header_pat.search(ln) or page_footer_pat.search(ln):
-                # Não mexe em in_block/current_cupom; apenas ignora
-                continue
-
-            # 1) Área de totais/encerramento REAL: encerrar bloco
-            if stop_totais_pat.search(ln):
-                in_block = False
-                current_cupom = None
-                # zera qualquer estado de transição
-                continue
-
-            # 2) Cabeçalho do cupom
-            m_head = header_pat.match(ln)
-            if m_head:
-                current_cupom = m_head.group(1)
-                in_block = True
-                continue
-
-            # 3) Dentro do bloco, linha CODPOS (apenas informativa)
-            if in_block and codpos_pat.match(ln):
-                continue
-
-            # 4) Venda dentro do bloco (aceita logo após quebra de página)
-            m_venda = venda_pat.search(ln)
-            if m_venda and in_block and current_cupom:
-                tipo = "Crédito" if m_venda.group(1).upper().startswith("CRED") else "Débito"
-                valor = smart_to_float(m_venda.group(2))
-                if valor is not None:
-                    tup = (current_cupom, tipo, valor)
-                    if tup not in seen_tuples:
-                        rows.append({
-                            "origem": "CUPOM",
-                            "doc": current_cupom,
-                            "tipo_cartao": tipo,
-                            "valor_venda": valor
-                        })
-                        seen_tuples.add(tup)
-
-    return pd.DataFrame(rows)
-
-# --------------------------
-# Parsing: NF (PDF)
-# --------------------------
-
-
-
-def parse_nf_pdf(pdf_path: str) -> pd.DataFrame:
-    import re
-    from PyPDF2 import PdfReader
-    from decimal import Decimal, ROUND_HALF_UP
-
-    def br2d(s: str) -> Decimal:
-        return Decimal(s.replace(".", "").replace(",", "."))
-
-    def d2f(d: Decimal) -> float:
-        return float(d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-
-    # ★ SIMPLIFICADO: qualquer linha que COMEÇA com 5–6 dígitos é uma NF
-    padrao_nf = re.compile(r"^\s*(\d{5,6})\b")
-
-    # valores monetários
-    money_pat = re.compile(r"(\d{1,3}(?:\.\d{3})*,\d{2})")
-
-    # labels
-    
-    credito_label = re.compile(r"^\s*VENDA\s+A\s+CARTAO\s+DE\s+CREDITO\b", re.IGNORECASE)
-    debito_label  = re.compile(r"VENDA\s+A\s+CARTAO\s+DEBITO", re.IGNORECASE)
-
-    def find_val(lines, idx, lookahead=4):
-        mm = money_pat.findall(lines[idx])
-        if mm:
-            return br2d(mm[-1])
-        for k in range(idx+1, min(idx+lookahead+1, len(lines))):
-            mm = money_pat.findall(lines[k])
-            if mm:
-                return br2d(mm[-1])
-        return None
-
-    rows = []
-    last_nota = None
-    reader = PdfReader(pdf_path)
-
-    for page_num, page in enumerate(reader.pages):
-        raw = page.extract_text() or ""
-        lines = [l.strip() for l in raw.split("\n") if l.strip()]
-
-        for idx, ln in enumerate(lines):
-
-            # capturamos a NF da forma mais ampla e segura possível
-            m_nf = padrao_nf.match(ln)
-            if m_nf:
-                last_nota = m_nf.group(1)
-                continue
-
-            if not last_nota:
-                continue
-
-            # Débito
-            if debito_label.search(ln):
-                val = find_val(lines, idx)
-                if val:
-                    rows.append({
-                        "origem": "NF",
-                        "doc": last_nota,
-                        "tipo_cartao": "Débito",
-                        "valor_venda": d2f(val),
-                        "pagina": page_num
+        # ── Linhas de pagamento de cartão ─────────────────────────────────────
+        for gatilho in _GATILHOS_CARTAO_CUPOM:
+            if up.startswith(gatilho):
+                if not cupom_atual:
+                    break
+                valor = _ultimo_num_linha(linha_strip)
+                if valor > 0:
+                    tipo = "Débito" if "DEBITO" in up else "Crédito"
+                    registros.append({
+                        "origem":     "Cupom Fiscal",
+                        "referencia": f"Cupom {cupom_atual}",
+                        "tipo":       tipo,
+                        "valor":      round(valor, 2),
+                        "descricao":  (f"{gatilho.title()} | Cupom {cupom_atual} "
+                                       f"| Cond: {cond_atual} | Vend: {vender_atual}"),
+                        "status":     "pendente",
+                        "par_banco":  "",
                     })
-                continue
+                # Não reseta cupom_atual: um cupom pode ter débito + crédito
+                break
+
+    return pd.DataFrame(registros)
 
 
-            # CRÉDITO - SOMENTE venda normal, exclui devoluções
-            if credito_label.search(ln):
-                val = find_val(lines, idx)
-                if val:
-                    rows.append({
-                        "origem": "NF",
-                        "doc": last_nota,
-                        "tipo_cartao": "Crédito",
-                        "valor_venda": d2f(val),
-                        "pagina": page_num
+# ─────────────────────────────────────────────────────────────────────────────
+# PARSER: NOTA FISCAL (PDF) — filtra VENDA A CARTAO DEBITO / CREDITO
+# ─────────────────────────────────────────────────────────────────────────────
+
+_GATILHOS_CARTAO_NF = [
+    "VENDA A CARTAO DEBITO",
+    "VENDA A CARTAO DE CREDITO",
+]
+
+def ler_nota_fiscal(path):
+    """
+    Lê o Relatório de Venda Avista — Notas Fiscais (PDF).
+    Captura linhas com "VENDA A CARTAO DEBITO" ou "VENDA A CARTAO DE CREDITO".
+    """
+    linhas = _extrair_linhas_pdf(path)
+    registros = []
+
+    nota_atual    = None
+    cliente_atual = ""
+    cond_atual    = ""
+
+    for linha in linhas:
+        linha_strip = linha.strip()
+        if not linha_strip:
+            continue
+        up = linha_strip.upper()
+
+        # ── Linha principal da nota ───────────────────────────────────────────
+        m = re.match(r"^(\d{5,})\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s{2,}(\S+)\s+([\d\.,]+)", linha_strip)
+        if m:
+            nota_atual    = m.group(1)
+            cliente_atual = m.group(6).strip()
+            cond_atual    = m.group(7).strip()
+            continue
+
+        # Fallback: linha que começa com número de nota
+        # Exige 4+ campos numéricos iniciais para não capturar linhas CODPOS
+        if re.match(r"^\d{5,}\s", linha_strip):
+            partes = linha_strip.split()
+            nums_ini = sum(1 for p in partes[:6] if re.match(r"^\d+$", p))
+            if nums_ini >= 4:
+                nota_atual    = partes[0]
+                cliente_atual = " ".join(p for p in partes[4:10]
+                                         if not re.match(r"^[\d\.,]+$", p))
+                cond_atual    = ""
+            continue
+
+        # ── Linhas de pagamento de cartão ─────────────────────────────────────
+        for gatilho in _GATILHOS_CARTAO_NF:
+            if up.startswith(gatilho):
+                if not nota_atual:
+                    break
+                valor = _ultimo_num_linha(linha_strip)
+                if valor > 0:
+                    tipo = "Débito" if "DEBITO" in up else "Crédito"
+                    registros.append({
+                        "origem":     "Nota Fiscal",
+                        "referencia": f"NF {nota_atual}",
+                        "tipo":       tipo,
+                        "valor":      round(valor, 2),
+                        "descricao":  (f"{gatilho.title()} | NF {nota_atual} "
+                                       f"| {cliente_atual} | Cond: {cond_atual}"),
+                        "status":     "pendente",
+                        "par_banco":  "",
                     })
-                continue
+                break
+
+    return pd.DataFrame(registros)
 
 
-    return pd.DataFrame(rows)
+# ─────────────────────────────────────────────────────────────────────────────
+# PARSER: RECIBOS (PDF) — filtra CART. DEB e CART. CRED via colunas DPP
+# ─────────────────────────────────────────────────────────────────────────────
 
-# --------------------------
-# Parsing: RECIBOS (PDF)
-# --------------------------
-
-
-
-
-def parse_recibos_pdf(pdf_path: str) -> pd.DataFrame:
+def ler_recibos(path):
     """
-    Parser 'regra híbrida' para RECIBOS — AJUSTADO p/ considerar JR_CART na soma:
-    - Cabeçalho 'CART. CRD./DEB.' (e 'TOTAL :') pode vir ANTES de 'CODPOS AUTORIZACAO DOCUMENTO';
-      bufferizamos e aplicamos ao DOCUMENTO correto quando CODPOS aparece.
-    - DPP: somamos cartão e acumulamos JR_CART por tipo de bloco:
-      CART_DEB, CART_CRED; JR_CART_DEB/JR_CART_CRED; também acumulamos não-cartão:
-      DESPESAS, DINH, CHEQUE, DEP_ANTECIPADO.
-    - Fechamento do bloco:
-      Débito:
-        * Se cabeçalho for "misto" OU houver qualquer valor não-cartão,
-          → usar SOMA(DPP_DEB + JR_CART_DEB).
-        * Senão, se houver TOTAL no cabeçalho → usar o TOTAL.
-        * Caso contrário → SOMA(DPP_DEB + JR_CART_DEB).
-      Crédito:
-        * Se houver TOTAL → usar TOTAL (não subtrai JR_CART).
-        * Senão → usar SOMA(DPP_CRED + JR_CART_CRED).
-    Retorna DataFrame com: origem='RECIBO', doc=<DOCUMENTO>, tipo_cartao ('Débito'/'Crédito'), valor_venda.
+    Lê o Relatório de Recibos (PDF).
+    Captura recibos que tenham valor em CART.DEB (col 10) ou CART.CRED (col 11).
+
+    Colunas DPP (números com vírgula, na ordem):
+      [0]RECEBIDO [1]V.DOC [2]JR.DOC [3]JR.CART [4]DESPESAS
+      [5]DINH. [6]CHEQUE [7]CART.DEB [8]CART.CRED [9]DEPOSITO
+      [10]ANTECIPADO [11]DEVCAR
     """
-    import re
-    from PyPDF2 import PdfReader
-    import pandas as pd
+    linhas = _extrair_linhas_pdf(path)
+    registros    = []
+    recibo_atual = None
 
-    reader = PdfReader(pdf_path)
+    for linha in linhas:
+        linha_limpa = linha.strip()
+        up = linha_limpa.upper()
 
-    # Detectores
-    labels_pat = re.compile(r"(?i)\bCODPOS\b.*\bDOCUMENTO\b")
-    nums_pat = re.compile(r"\d{3,}")
-    cart_hdr  = re.compile(r"(?i)CART\.\s*(CRD|DEB)\.")                              # 'CART. CRD.' ou 'CART. DEB.'
-    cart_tot  = re.compile(r"(?i)CART\.\s*(DEB|CRD)\.\s*.*?TOTAL\s*:\s*([\d\.,]+)")  # TOTAL : 999,99
-    dpp_a     = re.compile(r"^DPP\s+(\d+)\s+\S+\s+(.+)$")                            # DPP <doc> <serie> <resto>
-    dpp_b     = re.compile(r"^DPP(\d+)\b\s*(.+)$")                                   # DPP<doc> <resto>
-    money_pat = re.compile(r"\d+(?:\.\d{3})*,\d{2}")
+        # ── Detecta início de recibo ──────────────────────────────────────────
+        m_recibo = re.match(r"^(\d+)\s+(\d+)\s+", linha_limpa)
+        tem_texto_apos = bool(re.search(r"[A-Za-z]", linha_limpa.split(None, 2)[-1])) \
+                        if m_recibo else False
+        if m_recibo and tem_texto_apos:
+            # salva anterior se tiver valor de cartão
+            if recibo_atual and recibo_atual["valor"] > 0:
+                registros.append(recibo_atual)
+            recibo_atual = None   # reseta SEMPRE antes de decidir
 
-    rows = []
+            # Só processa se houver cartão na linha de cabeçalho
+            # Recibos com apenas DEP. PIX são ignorados neste conciliador
+            tem_cartao = ("CART. CRD" in up or "CART.CRD" in up or
+                          "CART. DEB" in up or "CART.DEB" in up)
+            if not tem_cartao:
+                continue          # recibo_atual permanece None → DPPs ignoradas
 
-    # Estado por bloco
-    in_block = False
-    documento = None
-    tipo_bloco = None  # 'Crédito'/'Débito'/None
+            partes = linha_limpa.split()
+            numero_recibo = partes[1] if len(partes) > 1 else "?"
 
-    header_total_deb = None
-    header_total_cred = None
-    header_text = ""
-    header_is_mixed_text = False  # TRUE se cabeçalho menciona DIN./DEP./PIX/CHEQUE
-
-    # Acumuladores
-    sum_dpp_deb  = 0.0
-    sum_dpp_cred = 0.0
-    sum_jr_cart_deb  = 0.0   # AJUSTE: juros do bloco de débito
-    sum_jr_cart_cred = 0.0   # AJUSTE: juros do bloco de crédito
-    sum_non_card = 0.0       # DESPESAS + DINH + CHEQUE + DEP_ANTECIPADO
-
-    def smart_to_float(x: object) -> float:
-        s = str(x)
-        s = re.sub(r"[^\d,\.\-]", "", s)
-        if "," in s and "." not in s:
-            s = s.replace(",", ".")
-        elif "." in s and "," in s:
-            s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")
-        try:
-            return round(float(s), 2)
-        except:
-            return 0.0
-
-    def try_doc(lines, i):
-        # Busca DOCUMENTO nas próximas 1–3 linhas com números
-        for k in range(1, 4):
-            j = i + k
-            if j < len(lines):
-                nums = nums_pat.findall(lines[j])
-                if len(nums) >= 3: return nums[2]
-                elif len(nums) >= 2: return nums[-1]
-                elif len(nums) >= 1: return nums[0]
-        return None
-
-    def start_block():
-        nonlocal in_block, documento, tipo_bloco
-        nonlocal header_total_deb, header_total_cred, header_text, header_is_mixed_text
-        nonlocal sum_dpp_deb, sum_dpp_cred, sum_jr_cart_deb, sum_jr_cart_cred, sum_non_card
-        flush_block()  # fecha anterior, se existir
-        in_block = True
-        documento = None
-        tipo_bloco = None
-        header_total_deb = None
-        header_total_cred = None
-        header_text = ""
-        header_is_mixed_text = False
-        sum_dpp_deb = 0.0
-        sum_dpp_cred = 0.0
-        sum_jr_cart_deb = 0.0     # reset
-        sum_jr_cart_cred = 0.0    # reset
-        sum_non_card = 0.0
-
-    def flush_block():
-        nonlocal in_block, documento, tipo_bloco
-        nonlocal header_total_deb, header_total_cred, header_text, header_is_mixed_text
-        nonlocal sum_dpp_deb, sum_dpp_cred, sum_jr_cart_deb, sum_jr_cart_cred, sum_non_card, rows
-
-        if not in_block or documento is None:
-            return
-
-        # ==== DÉBITO (regra híbrida com JR_CART incluído quando usar DPP) ====
-        tem_nao_cartao = (sum_non_card > 0.0)
-        if header_total_deb is not None:
-            if tem_nao_cartao or header_is_mixed_text:
-                # Cabeçalho “misto” → usar SOMA DPP + JR_CART (cartão)
-                deb_out = round((sum_dpp_deb or 0.0) + (sum_jr_cart_deb or 0.0), 2)
+            if "CART. CRD" in up or "CART.CRD" in up:
+                tipo_pgto = "Crédito"
+            elif "CART. DEB" in up or "CART.DEB" in up:
+                tipo_pgto = "Débito"
             else:
-                # Só cartão no bloco → confiar no TOTAL do cabeçalho (TOTAL já inclui JR_CART)
-                deb_out = round(header_total_deb, 2)
+                tipo_pgto = "Misto"
+
+            recibo_atual = {
+                "origem":     "Recibo",
+                "referencia": f"Recibo {numero_recibo}",
+                "tipo":       tipo_pgto,
+                "valor":      0.0,
+                "descricao":  f"CARTÃO {tipo_pgto.upper()} | Recibo {numero_recibo}",
+                "status":     "pendente",
+                "par_banco":  "",
+            }
+            continue
+
+        # ── Linhas DPP: soma CART.DEB (idx 7) + CART.CRED (idx 8) ───────────
+        # recibo_atual é None para recibos PIX → linhas DPP ignoradas
+        if recibo_atual and up.startswith("DPP"):
+            partes_dpp = linha_limpa.split()
+            # DPP válida tem número de documento longo como 2º campo
+            # A linha de resumo "DPP 625,98 ..." não tem isso
+            if len(partes_dpp) < 3 or not re.match(r"^\d{8,}$", partes_dpp[1]):
+                continue
+            nums = re.findall(r"\d{1,3}(?:\.\d{3})*,\d{2}", linha_limpa)
+            # Mapeamento confirmado pelo layout real do PDF:
+            # [0]RECEBIDO [1]V.DOC [2]JR.DOC [3]JR.CART [4]DESPESAS
+            # [5]DINH. [6]CHEQUE [7]CART.DEB [8]CART.CRED [9]DEPOSITO ...
+            IDX_JR_CART   = 3
+            IDX_CART_DEB  = 7
+            IDX_CART_CRED = 8
+            jr_cart   = _num(nums[IDX_JR_CART])   if len(nums) > IDX_JR_CART   else 0.0
+            cart_deb  = _num(nums[IDX_CART_DEB])  if len(nums) > IDX_CART_DEB  else 0.0
+            cart_cred = _num(nums[IDX_CART_CRED]) if len(nums) > IDX_CART_CRED else 0.0
+            recibo_atual["valor"] = round(recibo_atual["valor"] + jr_cart + cart_deb + cart_cred, 2)
+
+    # Adiciona último recibo
+    if recibo_atual and recibo_atual["valor"] > 0:
+        registros.append(recibo_atual)
+
+    df = pd.DataFrame(registros)
+    if not df.empty:
+        df["saldo_rest"] = df["valor"]
+    return df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PARSER: EXTRATO CARTÕES (XLSX — Getnet/Santander, aba ANALITICO)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def ler_mov_cartao(path):
+    """
+    Lê o extrato de cartões em formato XLSX (Getnet/Santander, aba ANALITICO).
+
+    Colunas relevantes:
+      Cartões | Data/Hora da Venda | Número da Autorização
+      Número do Comprovante de Vendas | Número do Terminal
+      Descrição do Lançamento | Total de Parcelas | Valor Bruto
+
+    Regras:
+    - Cabeçalho está na linha de índice 7
+    - Captura linhas com "DEBITO" ou "CREDITO" / "PARCELADO" na descrição
+    - Valor Bruto já é numérico no xlsx
+    """
+    try:
+        df_raw = pd.read_excel(path, sheet_name="ANALITICO", header=7,
+                               engine="openpyxl")
+    except Exception:
+        df_raw = pd.read_excel(path, header=7, engine="openpyxl")
+
+    # Normalizar colunas (remove \n e espaços extras)
+    df_raw.columns = [str(c).replace("\n", " ").strip() for c in df_raw.columns]
+
+    col_desc  = "Descrição do Lançamento"
+    col_valor = "Valor Bruto"
+    col_dt    = "Data/Hora  da Venda"
+    col_autho = "Número da Autorização"
+    col_cv    = "Número do Comprovante  de Vendas"
+    col_term  = "Número do Terminal"
+    col_parc  = "Total de Parcelas"
+    col_cartao= "Cartões"
+
+    # Filtrar: apenas linhas com descrição de cartão (débito/crédito/parcelado)
+    df_raw = df_raw[df_raw[col_desc].notna()].copy()
+    mask = df_raw[col_desc].str.upper().str.contains(
+        r"DEBITO|CREDITO|PARCELADO", na=False)
+    df_raw = df_raw[mask].copy()
+
+    # Valor positivo
+    df_raw[col_valor] = pd.to_numeric(df_raw[col_valor], errors="coerce")
+    df_raw = df_raw[df_raw[col_valor] > 0].copy()
+    df_raw[col_valor] = df_raw[col_valor].round(2)
+
+    registros = []
+    for _, row in df_raw.iterrows():
+        dt_hora = str(row.get(col_dt, "")).strip()
+        partes_dt = dt_hora.split(" ")
+        dt   = partes_dt[0] if len(partes_dt) > 0 else ""
+        hora = partes_dt[1] if len(partes_dt) > 1 else ""
+
+        desc  = str(row.get(col_desc, "")).strip()
+        up_d  = desc.upper()
+        if "DEBITO" in up_d:
+            tipo = "Débito"
+        elif "PARCELADO" in up_d:
+            tipo = "Crédito Parcelado"
         else:
-            # Sem TOTAL → usar SOMA DPP + JR_CART
-            deb_out = round((sum_dpp_deb or 0.0) + (sum_jr_cart_deb or 0.0), 2)
-
-        # ==== CRÉDITO (TOTAL direto; senão SOMA DPP + JR_CART) ====
-        if header_total_cred is not None:
-            cred_out = round(header_total_cred, 2)  # AJUSTE: não subtrai JR_CART
-        else:
-            cred_out = round((sum_dpp_cred or 0.0) + (sum_jr_cart_cred or 0.0), 2)
-
-        # Emite linhas por tipo (> 0)
-        if deb_out > 0:
-            rows.append({
-                "origem": "RECIBO", "doc": documento,
-                "tipo_cartao": "Débito", "valor_venda": deb_out
-            })
-        if cred_out > 0:
-            rows.append({
-                "origem": "RECIBO", "doc": documento,
-                "tipo_cartao": "Crédito", "valor_venda": cred_out
-            })
-
-        # Reset bloco
-        in_block = False
-        documento = None
-        tipo_bloco = None
-        header_total_deb = None
-        header_total_cred = None
-        header_text = ""
-        header_is_mixed_text = False
-        sum_dpp_deb = 0.0
-        sum_dpp_cred = 0.0
-        sum_jr_cart_deb = 0.0
-        sum_jr_cart_cred = 0.0
-        sum_non_card = 0.0
-
-    # === Varredura do PDF ===
-    for page in reader.pages:
-        raw = page.extract_text() or ""
-        lines = [l.strip() for l in raw.split("\n") if l.strip()]
-
-        i = 0
-        while i < len(lines):
-            ln = lines[i]
-
-            # Cabeçalho de cartão (pode vir antes de CODPOS)
-            m_hdr = cart_hdr.search(ln)
-            if m_hdr:
-                start_block()
-                tipo_bloco = "Crédito" if m_hdr.group(1).upper().startswith("CRD") else "Débito"
-                header_text = ln
-                header_is_mixed_text = bool(re.search(r"\b(DIN\.|DEP\.|PIX|CHEQUE)\b", ln, flags=re.IGNORECASE))
-                m_tot = cart_tot.search(ln)
-                if m_tot:
-                    tipo_tot = m_tot.group(1).upper()
-                    val_tot = smart_to_float(m_tot.group(2))
-                    if tipo_tot.startswith("DEB"):
-                        header_total_deb = round(val_tot or 0.0, 2)
-                    else:
-                        header_total_cred = round(val_tot or 0.0, 2)
-                i += 1
-                continue
-
-            # CODPOS AUTORIZACAO DOCUMENTO → atribui DOCUMENTO ao bloco pendente
-            if labels_pat.search(ln):
-                if not in_block:
-                    start_block()
-                documento = try_doc(lines, i)
-                i += 1
-                continue
-
-            # DPP dentro do bloco: somar cartão + acumular JR_CART e NÃO-CARTÃO
-            if in_block:
-                m = dpp_a.match(ln)
-                alt = dpp_b.match(ln) if not m else None
-                if m or alt:
-                    rest = m.group(2) if m else alt.group(2)
-                    doc_dpp = m.group(1) if m else alt.group(1)
-
-                    if documento is None and doc_dpp:
-                        documento = doc_dpp
-
-                    amounts = money_pat.findall(rest)
-                    n = len(amounts)
-
-                    # [0] RECEBIDO, [1] V_DOC, [2] JR_DOC, [3] JR_CART, [4] DESPESAS,
-                    # [5] DINH, [6] CHEQUE, [7] CART_DEB, [8] CART_CRED, [9] DEP_ANTECIPADO, [10] DEVCAR
-                    idx_jr   = 3 if n >= 4 else (2 if n == 3 else None)
-                    idx_desp = 4 if n > 4 else None
-                    idx_dinh = 5 if n > 5 else None
-                    idx_chq  = 6 if n > 6 else None
-                    idx_deb  = 7 if n > 7 else None
-                    idx_cred = 8 if n > 8 else None
-                    idx_dep  = 9 if n > 9 else None
-
-                    jr_cart   = smart_to_float(amounts[idx_jr])   if (idx_jr   is not None and idx_jr   < n) else 0.0
-                    despesas  = smart_to_float(amounts[idx_desp]) if (idx_desp is not None and idx_desp < n) else 0.0
-                    dinh      = smart_to_float(amounts[idx_dinh]) if (idx_dinh is not None and idx_dinh < n) else 0.0
-                    cheque    = smart_to_float(amounts[idx_chq])  if (idx_chq  is not None and idx_chq  < n) else 0.0
-                    cart_deb  = smart_to_float(amounts[idx_deb])  if (idx_deb  is not None and idx_deb  < n) else 0.0
-                    cart_cred = smart_to_float(amounts[idx_cred]) if (idx_cred is not None and idx_cred < n) else 0.0
-                    depo      = smart_to_float(amounts[idx_dep])  if (idx_dep  is not None and idx_dep  < n) else 0.0
-
-                    sum_dpp_deb  += cart_deb or 0.0
-                    sum_dpp_cred += cart_cred or 0.0
-
-                    # AJUSTE: juros entram na soma do tipo correspondente ao bloco
-                    if tipo_bloco == "Crédito":
-                        sum_jr_cart_cred += jr_cart or 0.0
-                    elif tipo_bloco == "Débito":
-                        sum_jr_cart_deb  += jr_cart or 0.0
-
-                    sum_non_card += (despesas or 0.0) + (dinh or 0.0) + (cheque or 0.0) + (depo or 0.0)
-                    i += 1
-                    continue
-
-            i += 1
-
-        flush_block()
-
-    return pd.DataFrame(rows)
-
-
-# --------------------------
-# Pagamentos (Excel CSV)
-# --------------------------
-
-def load_pagamentos(path: str) -> pd.DataFrame:
-    """
-    Se Excel ANALITICO: tenta ler colunas 'Cartões' e 'Descrição do Lançamento' e 'Valor Bruto'.
-    Se CSV: aceita já padronizado com colunas ['tipo_cartao','valor_bruto'].
-    Filtra cartão (Crédito/Débito) e exclui negativos.
-    """
-    ext = os.path.splitext(path)[1].lower()
-    if ext in [".xlsx", ".xls"]:
-        df = pd.read_excel(path, engine="openpyxl", sheet_name="ANALITICO", header=7)
-        df = df.dropna(how="all")
-        txt_cols = [c for c in ["Cartões", "Descrição do Lançamento"] if c in df.columns]
-        tipos = df.apply(lambda r: classify_tipo_text(" ".join([str(r[c]) for c in txt_cols if c in df.columns and pd.notna(r[c])])), axis=1)
-        valores = df["Valor Bruto"].apply(smart_to_float)
-        out = pd.DataFrame({"tipo_cartao": tipos, "valor_bruto": valores})
-    else:
-        # CSV já padronizado
-        out = pd.read_csv(path)
-        if not set(["tipo_cartao", "valor_bruto"]).issubset(set(out.columns)):
-            raise ValueError("CSV de pagamentos deve ter colunas: tipo_cartao, valor_bruto")
-
-    out = out[out["tipo_cartao"].isin(["Crédito", "Débito"])]
-    out = out[out["valor_bruto"].notna() & (out["valor_bruto"] >= 0)]
-    out["valor_bruto"] = out["valor_bruto"].round(2)
-    return out
-
-# --------------------------
-# Conciliação por valor + condição
-# --------------------------
-
-
-# === Conciliação com múltiplos pagamentos (2-sum / 3-sum) ===
-
-def conciliar_vendas_pagamentos(
-    vendas_df: pd.DataFrame,
-    pagamentos_df: pd.DataFrame,
-    max_split: int = 3,  # até 3 pagamentos por venda
-    tol: float = 0.01    # tolerância para diferenças de centavos
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """
-    Etapas:
-    A) 1:1 exato por (tipo_cartao, valor)
-    B) Combinações (2-sum / 3-sum) do mesmo tipo para vendas restantes  -> multi-pagamento por venda
-    C) NOVO: Combinações (2-sum / 3-sum) de VENDAS do mesmo tipo para pagamentos restantes -> multi-venda por pagamento
-
-    Retorna: comparacao_df, pagamentos_sem_match_df, summary_matches_df
-    """
-    pagamentos_df = pagamentos_df.copy()
-    pagamentos_df["valor_bruto"] = pagamentos_df["valor_bruto"].round(2)
-
-    # índice -> (tipo, valor) para acesso rápido
-    idx_tipo_val = {
-        i: (pagamentos_df.loc[i, "tipo_cartao"], float(pagamentos_df.loc[i, "valor_bruto"]))
-        for i in pagamentos_df.index
-    }
-
-    # listas de pagamentos disponíveis por tipo
-    disponiveis_por_tipo = {
-        "Crédito": [(i, v) for i, (t, v) in idx_tipo_val.items() if t == "Crédito"],
-        "Débito":  [(i, v) for i, (t, v) in idx_tipo_val.items() if t == "Débito"]
-    }
-
-    # lookup 1:1 por tipo/valor
-    lookup_1a1 = {"Crédito": {}, "Débito": {}}
-    for tipo, lst in disponiveis_por_tipo.items():
-        for i, v in lst:
-            lookup_1a1[tipo].setdefault(v, []).append(i)
-
-    rows = []
-    usados_pags = set()   # pagamentos já consumidos
-    usados_vendas = set() # índices de vendas já conciliadas
-    vendas_sem_match = [] # lista de (row_series, tipo, valor, idx)
-
-    # --- Passo A: 1:1 exato ---
-    for idx_v, s in vendas_df.iterrows():
-        tipo = s["tipo_cartao"]
-        valor_venda = round(float(s["valor_venda"]), 2)
-        lst = lookup_1a1.get(tipo, {}).get(valor_venda, [])
-        if lst:
-            pay_idx = lst.pop(0)
-            usados_pags.add(pay_idx)
-            usados_vendas.add(idx_v)
-            rows.append({
-                "origem": s["origem"], "doc": s["doc"], "tipo_cartao": tipo,
-                "valor_venda": valor_venda, "valor_pagamento": valor_venda,
-                "status": "Conciliado (valor + condição)",
-                "diferenca": 0.00,
-                "pagamentos_usados": str(pay_idx),
-                "qtd_pagamentos": 1
-            })
-        else:
-            vendas_sem_match.append((s, tipo, valor_venda, idx_v))
-
-    # utilitário original: busca combinação de 2 ou 3 pagamentos do mesmo tipo
-    def encontra_combo_pags(tipo: str, alvo: float, max_k: int):
-        candidatos = [(i, v) for (i, v) in disponiveis_por_tipo.get(tipo, [])
-                      if i not in usados_pags and v <= alvo + tol]
-        candidatos.sort(key=lambda x: x[1])
-
-        # 2-sum
-        seen = {}
-        for i, v in candidatos:
-            need = round(alvo - v, 2)
-            if need < -tol:
-                continue
-            if need in seen:
-                j = seen[need]
-                if j != i:
-                    return [i, j]
-            if v not in seen:
-                seen[v] = i
-
-        # 3-sum
-        if max_k >= 3:
-            n = len(candidatos)
-            for a in range(n):
-                i_a, v_a = candidatos[a]
-                rem = round(alvo - v_a, 2)
-                if rem < -tol:
-                    continue
-                seen2 = {}
-                for b in range(n):
-                    if b == a:
-                        continue
-                    i_b, v_b = candidatos[b]
-                    need = round(rem - v_b, 2)
-                    if need < -tol:
-                        continue
-                    if need in seen2:
-                        i_c = seen2[need]
-                        if i_c != i_a and i_c != i_b:
-                            return [i_a, i_b, i_c]
-                    if v_b not in seen2:
-                        seen2[v_b] = i_b
-        return None
-
-    # --- Passo B: multi-pagamento para uma venda ---
-    for s, tipo, valor_venda, idx_v in vendas_sem_match:
-        combo = encontra_combo_pags(tipo, valor_venda, max_split)
-        if combo:
-            soma = round(sum(idx_tipo_val[i][1] for i in combo), 2)
-            for i in combo:
-                usados_pags.add(i)
-            usados_vendas.add(idx_v)
-            rows.append({
-                "origem": s["origem"], "doc": s["doc"], "tipo_cartao": tipo,
-                "valor_venda": valor_venda, "valor_pagamento": soma,
-                "status": "Conciliado (multi pagamento)",
-                "diferenca": round(soma - valor_venda, 2),
-                "pagamentos_usados": "\n".join(map(str, combo)),
-                "qtd_pagamentos": len(combo)
-            })
-
-    # >>> NOVO: Passo C — multi-venda para um pagamento <<<
-    # Preparamos as vendas livres (não usadas) por tipo
-    vendas_livres_por_tipo = {"Crédito": [], "Débito": []}
-    for idx_v, s in vendas_df.iterrows():
-        if idx_v in usados_vendas:
-            continue
-        tipo = s["tipo_cartao"]
-        val  = round(float(s["valor_venda"]), 2)
-        vendas_livres_por_tipo[tipo].append((idx_v, s, val))
-
-    def encontra_combo_vendas(tipo: str, alvo: float, max_k: int):
-        candidatos = [(idx_v, val) for (idx_v, s, val) in vendas_livres_por_tipo.get(tipo, [])
-                      if idx_v not in usados_vendas and val <= alvo + tol]
-        candidatos.sort(key=lambda x: x[1])
-
-        # 2-sum
-        seen = {}
-        for i_v, v in candidatos:
-            need = round(alvo - v, 2)
-            if need < -tol:
-                continue
-            if need in seen:
-                j_v = seen[need]
-                if j_v != i_v:
-                    return [i_v, j_v]
-            if v not in seen:
-                seen[v] = i_v
-
-        # 3-sum
-        if max_k >= 3:
-            n = len(candidatos)
-            for a in range(n):
-                i_a, v_a = candidatos[a]
-                rem = round(alvo - v_a, 2)
-                if rem < -tol:
-                    continue
-                seen2 = {}
-                for b in range(n):
-                    if b == a:
-                        continue
-                    i_b, v_b = candidatos[b]
-                    need = round(rem - v_b, 2)
-                    if need < -tol:
-                        continue
-                    if need in seen2:
-                        i_c = seen2[need]
-                        if i_c != i_a and i_c != i_b:
-                            return [i_a, i_b, i_c]
-                    if v_b not in seen2:
-                        seen2[v_b] = i_b
-        return None
-    
-
-
-
-    # >>> PASSO D — multi-venda + multi-pagamento (COMPLETO) <<<
-    # Pré-requisito: 'vendas_livres_por_tipo' foi definido no Passo C.
-    # Se por algum motivo não estiver no escopo, reconstrua:
-    # try:
-    #     vendas_livres_por_tipo
-    # except NameError:
-    #     vendas_livres_por_tipo = {"Crédito": [], "Débito": []}
-    #     for idx_v, s in vendas_df.iterrows():
-    #         if idx_v in usados_vendas: 
-    #             continue
-    #         t = s["tipo_cartao"]; val = round(float(s["valor_venda"]), 2)
-    #         vendas_livres_por_tipo[t].append((idx_v, s, val))
-
-    # Lista de pagamentos livres por tipo
-    pags_livres_por_tipo = {"Crédito": [], "Débito": []}
-    for pay_idx in pagamentos_df.index:
-        if pay_idx in usados_pags:
-            continue
-        t, v = idx_tipo_val[pay_idx]
-        pags_livres_por_tipo[t].append((pay_idx, round(float(v), 2)))
-
-    # Configuração: quantidade máxima de vendas em um grupo (subset) que casa com o total dos pagamentos
-    max_items_venda = 10  # ajuste se necessário. 10 cobre bem casos com 5+ recibos.
-
-    def encontra_combo_vendas_exato_por_total(tipo: str, alvo: float, max_items: int):
-        """
-        Procura um subset de vendas do 'tipo' cuja soma == alvo (com tolerância 'tol').
-        Aceita de 1 até 'max_items' itens. Retorna lista de índices de vendas ou None.
-        """
-        # candidatos livres e relevantes (<= alvo + tol)
-        cand = [(idx_v, val) for (idx_v, s, val) in vendas_livres_por_tipo.get(tipo, [])
-                if (idx_v not in usados_vendas) and (val <= round(alvo + tol, 2))]
-        if not cand:
-            return None
-
-        # tenta 1:1 exato antes (caso trivial)
-        alvo_r = round(alvo, 2)
-        for i_v, v in cand:
-            if abs(v - alvo_r) <= tol:
-                return [i_v]
-
-        # ordena crescente para facilitar poda e reduzir explosão combinatória
-        cand.sort(key=lambda x: x[1])
-        n = len(cand)
-
-        # backtracking com poda
-        best = None
-
-        def dfs(start, acc_sum, chosen):
-            nonlocal best
-            # sucesso?
-            if abs(acc_sum - alvo_r) <= tol and chosen:
-                best = chosen[:]
-                return True
-            # podas por tamanho e por excesso
-            if len(chosen) >= max_items or acc_sum > alvo_r + tol:
-                return False
-
-            prev_val = None
-            for pos in range(start, n):
-                i_v, v = cand[pos]
-                if i_v in usados_vendas:
-                    continue
-                # evita percorrer valores iguais na mesma profundidade (reduz duplicatas)
-                if prev_val is not None and abs(v - prev_val) <= 1e-9:
-                    continue
-                prev_val = v
-
-                new_sum = round(acc_sum + v, 2)
-                if dfs(pos + 1, new_sum, chosen + [i_v]):
-                    return True
-            return False
-
-        dfs(0, 0.0, [])
-        return best
-
-    def tenta_conciliar_pagamentos_em_vendas(tipo: str, pay_indices: list):
-        """
-        Recebe 1, 2 ou 3 índices de pagamentos (mesmo tipo) e
-        tenta achar um subset de vendas cuja soma == soma desses pagamentos.
-        Se conciliar, marca usados e emite linhas em 'rows'. Retorna True/False.
-        """
-        total_p = round(sum(idx_tipo_val[i][1] for i in pay_indices), 2)
-        combo_v = encontra_combo_vendas_exato_por_total(tipo, total_p, max_items_venda)
-        if not combo_v:
-            return False
-
-        # marca como usados
-        for i in pay_indices:
-            usados_pags.add(i)
-        for i_v in combo_v:
-            usados_vendas.add(i_v)
-
-        # emite uma linha por venda do combo, apontando para TODOS os pagamentos do grupo
-        total_grp = total_p
-        for i_v in combo_v:
-            s_v = vendas_df.loc[i_v]
-            rows.append({
-                "origem": s_v["origem"],
-                "doc": s_v["doc"],
-                "tipo_cartao": tipo,
-                "valor_venda": round(float(s_v["valor_venda"]), 2),
-                "valor_pagamento": total_grp,
-                "status": "Conciliado (multi venda + multi pagamento)",
-                "diferenca": round(total_grp - float(s_v["valor_venda"]), 2),
-                "pagamentos_usados": "\n".join(map(str, pay_indices)),
-                "qtd_pagamentos": len(pay_indices),
-            })
-        return True
-
-    # Varre por tipo e tenta 1P->nV, depois 2P->nV, depois 3P->nV (limitado por max_split)
-    for tipo in ("Crédito", "Débito"):
-        # helper para obter índices de pagamentos livres do tipo (vai mudando conforme conciliamos)
-        def pagamentos_livres_do_tipo():
-            return [i for (i, _) in pags_livres_por_tipo.get(tipo, []) if i not in usados_pags]
-
-        # 1 pagamento -> subset de vendas
-        for i in pagamentos_livres_do_tipo():
-            tenta_conciliar_pagamentos_em_vendas(tipo, [i])
-
-        # 2 pagamentos -> subset de vendas
-        livres = pagamentos_livres_do_tipo()
-        m = len(livres)
-        for a in range(m):
-            i_a = livres[a]
-            if i_a in usados_pags:
-                continue
-            for b in range(a + 1, m):
-                i_b = livres[b]
-                if i_b in usados_pags:
-                    continue
-                tenta_conciliar_pagamentos_em_vendas(tipo, [i_a, i_b])
-
-        # 3 pagamentos -> subset de vendas (se permitido pelo max_split)
-        if max_split >= 3:
-            livres = pagamentos_livres_do_tipo()
-            m = len(livres)
-            for a in range(m):
-                i_a = livres[a]
-                if i_a in usados_pags:
-                    continue
-                for b in range(a + 1, m):
-                    i_b = livres[b]
-                    if i_b in usados_pags:
-                        continue
-                    for c in range(b + 1, m):
-                        i_c = livres[c]
-                        if i_c in usados_pags:
-                            continue
-                        tenta_conciliar_pagamentos_em_vendas(tipo, [i_a, i_b, i_c])
-
-
-
-    # Percorre pagamentos que sobraram e tenta formar combos de vendas
-    for pay_idx in pagamentos_df.index:
-        if pay_idx in usados_pags:
-            continue
-        tipo_p, val_p = idx_tipo_val[pay_idx]
-        combo_v = encontra_combo_vendas(tipo_p, val_p, max_split)
-        if combo_v:
-            soma_v = round(sum(vendas_df.loc[i_v, "valor_venda"] for i_v in combo_v), 2)
-            # marca pagamento como usado
-            usados_pags.add(pay_idx)
-            # cria uma linha de conciliação para CADA venda do combo, apontando para o MESMO pagamento
-            for i_v in combo_v:
-                s_v = vendas_df.loc[i_v]
-                usados_vendas.add(i_v)
-                rows.append({
-                    "origem": s_v["origem"], "doc": s_v["doc"], "tipo_cartao": tipo_p,
-                    "valor_venda": round(float(s_v["valor_venda"]), 2), "valor_pagamento": val_p,
-                    "status": "Conciliado (multi venda)",
-                    "diferenca": round(val_p - float(s_v["valor_venda"]), 2),
-                    "pagamentos_usados": str(pay_idx),
-                    "qtd_pagamentos": 1  # um pagamento cobre várias vendas; aqui é por linha de venda
-                })
-
-    # Vendas que continuaram sem match (nem A/B/C)
-    for idx_v, s in vendas_df.iterrows():
-        if idx_v in usados_vendas:
-            continue
-        rows.append({
-            "origem": s.get("origem", ""), "doc": s.get("doc", ""), "tipo_cartao": s.get("tipo_cartao", ""),
-            "valor_venda": round(float(s.get("valor_venda", 0)), 2), "valor_pagamento": None,
-            "status": "Sem pagamento encontrado",
-            "diferenca": None, "pagamentos_usados": "", "qtd_pagamentos": 0
+            tipo = "Crédito"
+
+        cv       = str(row.get(col_cv,    "")).strip()
+        autho    = str(row.get(col_autho, "")).strip()
+        terminal = str(row.get(col_term,  "")).strip()
+        parcelas = row.get(col_parc, 1)
+        try:
+            parcelas = int(float(parcelas))
+        except:
+            parcelas = 1
+        cartao   = str(row.get(col_cartao, "")).strip()
+        valor    = float(row[col_valor])
+
+        registros.append({
+            "DT_VENDA":  dt,
+            "HR_VENDA":  hora,
+            "CARTAO":    cartao,
+            "TIPO":      tipo,
+            "AUTHO":     autho,
+            "CV":        cv,
+            "TERMINAL":  terminal,
+            "PARCELAS":  parcelas,
+            "VALOR":     valor,
+            "status":    "pendente",
+            "par_venda": "",
+            "saldo_rest": valor,
         })
 
-    comparacao = pd.DataFrame(rows)
+    COLS = ["DT_VENDA","HR_VENDA","CARTAO","TIPO","AUTHO","CV",
+            "TERMINAL","PARCELAS","VALOR","status","par_venda","saldo_rest"]
+    if not registros:
+        df = pd.DataFrame(columns=COLS)
+        df["VALOR"]      = pd.Series(dtype=float)
+        df["saldo_rest"] = pd.Series(dtype=float)
+    else:
+        df = pd.DataFrame(registros, columns=COLS)
+        df["saldo_rest"] = df["VALOR"]
 
-    # pagamentos não utilizados
-    pagamentos_sem_match = pagamentos_df.loc[[i for i in pagamentos_df.index if i not in usados_pags]].copy()
-
-    # sumário
-    summary_matches = (comparacao
-        .groupby(["origem", "tipo_cartao", "status"])["valor_venda"]
-        .agg(["count", "sum"])
-        .reset_index())
-    return comparacao, pagamentos_sem_match, summary_matches
-
-
-
-# --------------------------
-# Exportar Excel final
-# --------------------------
-
-def export_excel_final(dest_path: str, comparacao: pd.DataFrame, vendas_agg: pd.DataFrame, pagamentos: pd.DataFrame,
-                       pagamentos_sem_match: pd.DataFrame, summary_matches: pd.DataFrame):
-    with pd.ExcelWriter(dest_path, engine="openpyxl") as w:
-        comparacao.to_excel(w, index=False, sheet_name="comparacao")
-        vendas_agg.to_excel(w, index=False, sheet_name="vendas_aggregadas")
-        pagamentos.to_excel(w, index=False, sheet_name="pagamentos_base")
-        summary_matches.to_excel(w, index=False, sheet_name="sumario_matches")
-        if not pagamentos_sem_match.empty:
-            pagamentos_sem_match.to_excel(w, index=False, sheet_name="pagamentos_sem_match")
-
-# --------------------------
-# Tkinter GUI
-# --------------------------
+    return df
 
 
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-import pandas as pd
-import re
+# ─────────────────────────────────────────────────────────────────────────────
+# CONCILIAÇÃO AUTOMÁTICA
+# ─────────────────────────────────────────────────────────────────────────────
 
-# >>> mantém seus imports e funções existentes (parse_* e conciliar_*)
+def conciliar_automatico(df_vendas, df_banco, tolerancia=0.01):
+    dv = df_vendas.copy()
+    db = df_banco.copy()
+
+    dv["status"]     = "pendente"
+    dv["par_banco"]  = ""
+    dv["saldo_rest"] = dv["valor"]
+    db["status"]     = "pendente"
+    db["par_venda"]  = ""
+    db["saldo_rest"] = db["VALOR"]
+
+    par_counter = [0]
+
+    def novo_par():
+        par_counter[0] += 1
+        return f"P{par_counter[0]:04d}"
+
+    for iv, row_v in dv.iterrows():
+        saldo_v = dv.at[iv, "saldo_rest"]
+        if saldo_v <= tolerancia:
+            continue
+
+        candidatos = db[
+            (db["saldo_rest"] > tolerancia) &
+            (abs(db["VALOR"] - saldo_v) <= tolerancia)
+        ]
+
+        for ib, _ in candidatos.iterrows():
+            saldo_v = dv.at[iv, "saldo_rest"]
+            saldo_b = db.at[ib, "saldo_rest"]
+            if saldo_v <= tolerancia or saldo_b <= tolerancia:
+                continue
+            val = min(saldo_v, saldo_b)
+            par = novo_par()
+            dv.at[iv, "par_banco"]  += ("," if dv.at[iv, "par_banco"] else "") + par
+            dv.at[iv, "saldo_rest"]  = round(saldo_v - val, 2)
+            db.at[ib, "par_venda"]  += ("," if db.at[ib, "par_venda"] else "") + par
+            db.at[ib, "saldo_rest"]  = round(saldo_b - val, 2)
+
+    def st_v(row):
+        if not row["par_banco"]: return "pendente"
+        return "conciliado" if row["saldo_rest"] <= tolerancia else "parcial"
+
+    def st_b(row):
+        if not row["par_venda"]: return "pendente"
+        return "conciliado" if row["saldo_rest"] <= tolerancia else "parcial"
+
+    dv["status"] = dv.apply(st_v, axis=1)
+    db["status"] = db.apply(st_b, axis=1)
+
+    return dv, db
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INTERFACE
+# ─────────────────────────────────────────────────────────────────────────────
 
 class ConciliacaoApp(tk.Toplevel):
     def __init__(self, master=None):
         super().__init__(master)
+        self.title("Conciliador CARTÕES — PMZ Peças e Pneus")
+        self.geometry("1600x880")
+        self.configure(bg=COR_BG)
+        self.resizable(True, True)
 
+        self.df_vendas = None
+        self.df_banco  = None
+        self.paths     = {"cupom": None, "nf": None, "recibo": None, "banco": None}
+        self.sel_vendas = []
+        self.sel_bancos = []
 
-        # ===== ESTILO DARK PARA NOTEBOOK / TREEVIEW =====
-        style = ttk.Style(self)
+        self._build_ui()
+        self._aplicar_estilos()
 
-        # habilita tema para permitir customização completa
-        style.theme_use("clam")
+    # ─── Build UI ─────────────────────────────────────────────────────────────
 
-        # Notebook (as abas)
-        style.configure("TNotebook",
-            background="#1e1e1e",
-            borderwidth=0
-        )
-        style.configure("TNotebook.Tab",
-            background="#2e2e2e",
-            foreground="#ffffff",
-            padding=[10, 5]
-        )
-        style.map("TNotebook.Tab",
-            background=[("selected", "#00bfff")],
-            foreground=[("selected", "#000000")]
-        )
+    def _build_ui(self):
+        self._build_topbar()
+        corpo = tk.Frame(self, bg=COR_BG)
+        corpo.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self._build_painel_esq(corpo)
+        self._build_tabelas(corpo)
+        self._build_statusbar()
 
-        # Corpo interno do Notebook
-        style.configure("TFrame", background="#1e1e1e")
+    def _build_topbar(self):
+        bar = tk.Frame(self, bg=COR_PAINEL, height=58)
+        bar.pack(fill="x")
+        bar.pack_propagate(False)
+        tk.Label(bar, text="💳  Conciliador CARTÕES — PMZ",
+                 bg=COR_PAINEL, fg=COR_TEXTO,
+                 font=("Segoe UI", 13, "bold")).pack(side="left", padx=16, pady=12)
 
-        # Treeview fundo escuro
-        style.configure("Treeview",
-            background="#1e1e1e",
-            foreground="#ffffff",
-            fieldbackground="#1e1e1e",
-            rowheight=24,
-        )
-        style.configure("Treeview.Heading",
-            background="#2e2e2e",
-            foreground="#ffffff"
-        )
-        style.map("Treeview.Heading",
-            background=[("active", "#00bfff")]
-        )
+        for txt, cor, cmd in [
+            ("🔄  Conciliar Auto",   COR_AZUL,    self.conciliar_auto),
+            ("🤝  Conciliar Manual", COR_VERDE,   self.conciliar_manual),
+            ("🔓  Desconciliar",     COR_AMARELO, self.desconciliar),
+            ("🚫  Ignorar",          COR_CINZA,   self.ignorar),
+        ]:
+            tk.Button(bar, text=txt, bg=cor, fg="white",
+                      font=("Segoe UI", 9, "bold"), relief="flat",
+                      padx=12, pady=6, cursor="hand2",
+                      command=cmd).pack(side="left", padx=4, pady=12)
 
-        # Scrollbars escuros
-        style.configure("Vertical.TScrollbar", background="#1e1e1e")
-        style.configure("Horizontal.TScrollbar", background="#1e1e1e")
+    def _build_painel_esq(self, parent):
+        frame = tk.Frame(parent, bg=COR_PAINEL, width=235)
+        frame.pack(side="left", fill="y", padx=(0, 10), pady=10)
+        frame.pack_propagate(False)
 
-        # Tema/estilo no padrão prisma.py
-        self.title("Conciliação Cartões")
-        self.configure(bg="#1e1e1e")
-        self.geometry("1080x720")
+        tk.Label(frame, text="ARQUIVOS", bg=COR_PAINEL, fg=COR_ACENTO,
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=12, pady=(14, 4))
 
-        # Arquivos selecionados
-        self.cupom_paths = []
-        self.nf_paths = []
-        self.recibos_paths = []
-        self.pagamentos_path = None
+        self.lbl_paths = {}
+        for chave, label, cmd in [
+            ("cupom",  "📄 Cupom Fiscal",  self.carregar_cupom),
+            ("nf",     "🧾 Nota Fiscal",   self.carregar_nf),
+            ("recibo", "📋 Recibos",       self.carregar_recibo),
+            ("banco",  "🏦 Extrato Cartões", self.carregar_banco),
+        ]:
+            tk.Button(frame, text=label, bg=COR_ACENTO2, fg="white",
+                      font=("Segoe UI", 8, "bold"), relief="flat",
+                      padx=8, pady=4, cursor="hand2", anchor="w",
+                      command=cmd).pack(fill="x", padx=12, pady=(4, 0))
+            lbl = tk.Label(frame, text="(não carregado)", bg=COR_PAINEL,
+                           fg=COR_TEXTO_SEC, font=("Segoe UI", 7),
+                           wraplength=210, justify="left")
+            lbl.pack(anchor="w", padx=14, pady=(0, 4))
+            self.lbl_paths[chave] = lbl
 
-        # Dados finais
-        self.vendas_aggregadas = pd.DataFrame()
-        self.pagamentos_df = pd.DataFrame()
-        self.comparacao_df = pd.DataFrame()
-        self.pagamentos_sem_match = pd.DataFrame()
-        self.summary_matches = pd.DataFrame()
+        # Resumo Vendas
+        tk.Frame(frame, bg=COR_BORDA, height=1).pack(fill="x", padx=12, pady=8)
+        tk.Label(frame, text="RESUMO VENDAS CARTÃO", bg=COR_PAINEL, fg=COR_ACENTO,
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=12)
 
-    
-        self._create_widgets()
+        self.lbl_res = {}
+        for k, lbl, cor in [
+            ("v_total",      "Total registros:",  COR_TEXTO),
+            ("v_conciliado", "✅ Conciliados:",   COR_VERDE),
+            ("v_parcial",    "⚠ Parciais:",       COR_AMARELO),
+            ("v_pendente",   "❌ Pendentes:",     COR_VERMELHO),
+            ("v_ignorado",   "🚫 Ignorados:",     COR_CINZA),
+            ("v_soma",       "Σ Valor Vendas:",   COR_TEXTO),
+        ]:
+            row = tk.Frame(frame, bg=COR_PAINEL)
+            row.pack(fill="x", padx=12, pady=1)
+            tk.Label(row, text=lbl, bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                     font=("Segoe UI", 8)).pack(side="left")
+            l = tk.Label(row, text="—", bg=COR_PAINEL, fg=cor,
+                         font=("Segoe UI", 8, "bold"))
+            l.pack(side="right")
+            self.lbl_res[k] = l
 
-    # ---------- Helpers de UI / formatação ----------
-    def _apply_brilho(self, botao):
-        botao.bind("<Enter>", lambda e: botao.config(bg="#00bfff", fg="#ffffff"))
-        botao.bind("<Leave>", lambda e: botao.config(bg="#2e2e2e", fg="#ffffff"))
+        # Resumo Banco
+        tk.Frame(frame, bg=COR_BORDA, height=1).pack(fill="x", padx=12, pady=6)
+        tk.Label(frame, text="RESUMO EXTRATO CARTÕES", bg=COR_PAINEL, fg=COR_ACENTO,
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=12)
 
-    def _fmt_brl(self, v) -> str:
+        for k, lbl, cor in [
+            ("b_total",      "Total registros:",  COR_TEXTO),
+            ("b_conciliado", "✅ Conciliados:",   COR_VERDE),
+            ("b_pendente",   "❌ Pendentes:",     COR_VERMELHO),
+            ("b_soma",       "Σ Valor Banco:",    COR_TEXTO),
+            ("diferenca",    "Δ Diferença:",      COR_AZUL),
+        ]:
+            row = tk.Frame(frame, bg=COR_PAINEL)
+            row.pack(fill="x", padx=12, pady=1)
+            tk.Label(row, text=lbl, bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                     font=("Segoe UI", 8)).pack(side="left")
+            l = tk.Label(row, text="—", bg=COR_PAINEL, fg=cor,
+                         font=("Segoe UI", 8, "bold"))
+            l.pack(side="right")
+            self.lbl_res[k] = l
+
+        # Manual
+        tk.Frame(frame, bg=COR_BORDA, height=1).pack(fill="x", padx=12, pady=8)
+        tk.Label(frame, text="MANUAL", bg=COR_PAINEL, fg=COR_ACENTO,
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=12)
+        tk.Label(frame,
+                 text="1. Clique em uma ou mais VENDAS (tabela cima)\n"
+                      "   (clique novamente para desmarcar)\n"
+                      "2. Clique em um ou mais do extrato (tabela baixo)\n"
+                      "3. Pressione 'Conciliar Manual'",
+                 bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 8), justify="left").pack(anchor="w", padx=12, pady=2)
+
+        self.lbl_sel_v = tk.Label(frame, text="Venda: (nenhuma)",
+                                  bg=COR_PAINEL, fg=COR_VERDE,
+                                  font=("Segoe UI", 8, "italic"), wraplength=210)
+        self.lbl_sel_v.pack(anchor="w", padx=12)
+        self.lbl_sel_b = tk.Label(frame, text="Banco: (nenhum)",
+                                  bg=COR_PAINEL, fg=COR_AZUL,
+                                  font=("Segoe UI", 8, "italic"), wraplength=210)
+        self.lbl_sel_b.pack(anchor="w", padx=12, pady=(2, 0))
+
+        tk.Button(frame, text="Limpar seleção", bg=COR_BG, fg=COR_TEXTO_SEC,
+                  font=("Segoe UI", 8), relief="flat", cursor="hand2",
+                  command=self.limpar_selecao).pack(anchor="w", padx=12, pady=(6, 0))
+
+        # Filtro
+        tk.Frame(frame, bg=COR_BORDA, height=1).pack(fill="x", padx=12, pady=8)
+        tk.Label(frame, text="Filtrar status:", bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 8)).pack(anchor="w", padx=12)
+        self.filtro_status = ttk.Combobox(frame, state="readonly",
+            values=["Todos", "pendente", "parcial", "conciliado", "ignorado"])
+        self.filtro_status.set("Todos")
+        self.filtro_status.pack(fill="x", padx=12, pady=(2, 4))
+        self.filtro_status.bind("<<ComboboxSelected>>", lambda _: self.atualizar_tabelas())
+
+        # Filtro tipo
+        tk.Label(frame, text="Filtrar tipo:", bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 8)).pack(anchor="w", padx=12)
+        self.filtro_tipo = ttk.Combobox(frame, state="readonly",
+            values=["Todos", "Débito", "Crédito", "Crédito Parcelado"])
+        self.filtro_tipo.set("Todos")
+        self.filtro_tipo.pack(fill="x", padx=12, pady=(2, 4))
+        self.filtro_tipo.bind("<<ComboboxSelected>>", lambda _: self.atualizar_tabelas())
+
+    def _build_tabelas(self, parent):
+        frame = tk.Frame(parent, bg=COR_BG)
+        frame.pack(side="left", fill="both", expand=True, pady=10)
+
+        # ── Tabela superior: Vendas ───────────────────────────────────────────
+        tk.Label(frame,
+                 text="VENDAS CARTÃO  (Cupom Fiscal + Nota Fiscal + Recibos)",
+                 bg=COR_BG, fg=COR_ACENTO,
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 2))
+
+        frm_v = tk.Frame(frame, bg=COR_BG)
+        frm_v.pack(fill="both", expand=True)
+
+        self.cols_v = ["origem", "referencia", "tipo", "valor",
+                       "saldo_rest", "descricao", "status", "par_banco"]
+        self.tree_v = ttk.Treeview(frm_v, columns=self.cols_v,
+                                   show="headings", selectmode="extended", height=12)
+        largs_v = {"origem": 80, "referencia": 100, "tipo": 80, "valor": 80,
+                   "saldo_rest": 80, "descricao": 380, "status": 80, "par_banco": 80}
+        for col in self.cols_v:
+            self.tree_v.heading(col, text=col.upper())
+            self.tree_v.column(col, width=largs_v.get(col, 90),
+                               anchor="center" if col in ("valor", "saldo_rest",
+                                                          "status", "par_banco",
+                                                          "tipo") else "w")
+        sb_vy = ttk.Scrollbar(frm_v, orient="vertical",   command=self.tree_v.yview)
+        sb_vx = ttk.Scrollbar(frm_v, orient="horizontal", command=self.tree_v.xview)
+        self.tree_v.configure(yscrollcommand=sb_vy.set, xscrollcommand=sb_vx.set)
+        sb_vy.pack(side="right",  fill="y")
+        sb_vx.pack(side="bottom", fill="x")
+        self.tree_v.pack(fill="both", expand=True)
+        self.tree_v.bind("<ButtonRelease-1>", self._on_click_venda)
+        self._cfg_tags(self.tree_v)
+
+        # ── Tabela inferior: Extrato Cartões ─────────────────────────────────
+        tk.Label(frame, text="EXTRATO CARTÕES — BANCO (XLSX)",
+                 bg=COR_BG, fg=COR_ROXO,
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(8, 2))
+
+        frm_b = tk.Frame(frame, bg=COR_BG)
+        frm_b.pack(fill="both", expand=True)
+
+        self.cols_b = ["DT_VENDA","HR_VENDA","CARTAO","TIPO","AUTHO",
+                       "CV","TERMINAL","PARCELAS","VALOR",
+                       "saldo_rest","status","par_venda"]
+        self.tree_b = ttk.Treeview(frm_b, columns=self.cols_b,
+                                   show="headings", selectmode="extended", height=12)
+        largs_b = {"DT_VENDA": 80, "HR_VENDA": 65, "CARTAO": 130, "TIPO": 90,
+                   "AUTHO": 80, "CV": 80, "TERMINAL": 75, "PARCELAS": 55,
+                   "VALOR": 80, "saldo_rest": 80, "status": 80, "par_venda": 80}
+        for col in self.cols_b:
+            self.tree_b.heading(col, text=col.upper())
+            self.tree_b.column(col, width=largs_b.get(col, 80),
+                               anchor="center" if col in ("VALOR", "saldo_rest",
+                                                          "status", "par_venda",
+                                                          "PARCELAS", "HR_VENDA",
+                                                          "DT_VENDA", "TIPO") else "w")
+        sb_by = ttk.Scrollbar(frm_b, orient="vertical",   command=self.tree_b.yview)
+        sb_bx = ttk.Scrollbar(frm_b, orient="horizontal", command=self.tree_b.xview)
+        self.tree_b.configure(yscrollcommand=sb_by.set, xscrollcommand=sb_bx.set)
+        sb_by.pack(side="right",  fill="y")
+        sb_bx.pack(side="bottom", fill="x")
+        self.tree_b.pack(fill="both", expand=True)
+        self.tree_b.bind("<ButtonRelease-1>", self._on_click_banco)
+        self._cfg_tags(self.tree_b)
+
+    def _cfg_tags(self, tree):
+        tree.tag_configure("conciliado", background="#1a3a2a", foreground="#2ecc71")
+        tree.tag_configure("parcial",    background="#3a3010", foreground="#f39c12")
+        tree.tag_configure("pendente",   background="#3a1010", foreground="#e74c3c")
+        tree.tag_configure("ignorado",   background="#2a2a2a", foreground="#7f8c8d")
+        tree.tag_configure("selecionado",background="#1a1a5e", foreground="#ffffff")
+
+    def _build_statusbar(self):
+        bar = tk.Frame(self, bg=COR_PAINEL, height=26)
+        bar.pack(fill="x", side="bottom")
+        bar.pack_propagate(False)
+        self.status_var = tk.StringVar(value="Pronto. Carregue os relatórios para começar.")
+        tk.Label(bar, textvariable=self.status_var, bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 8), anchor="w").pack(side="left", padx=10)
+
+    def _aplicar_estilos(self):
+        s = ttk.Style(self)
+        s.theme_use("clam")
+        s.configure("Treeview", background=COR_BG, fieldbackground=COR_BG,
+                    foreground=COR_TEXTO, rowheight=22, font=("Segoe UI", 8))
+        s.configure("Treeview.Heading", background=COR_PAINEL, foreground=COR_ACENTO,
+                    font=("Segoe UI", 8, "bold"), relief="flat")
+        s.map("Treeview", background=[("selected", COR_ACENTO2)])
+        s.configure("TScrollbar", background=COR_PAINEL,
+                    troughcolor=COR_BG, arrowcolor=COR_TEXTO_SEC)
+        s.configure("TCombobox", fieldbackground=COR_BG,
+                    background=COR_BG, foreground=COR_TEXTO)
+
+    # ─── Carregamento ─────────────────────────────────────────────────────────
+
+    def _carregar(self, chave, func, label, eh_pdf=True):
+        ft_pdf   = [("PDF",   "*.pdf"),               ("Todos", "*.*")]
+        ft_excel = [("Excel", "*.xlsx *.xls *.xlsm"), ("Todos", "*.*")]
+        path = filedialog.askopenfilename(
+            title=f"Selecionar {label}",
+            filetypes=ft_pdf if eh_pdf else ft_excel)
+        if not path:
+            return None
         try:
-            n = float(v)
-            s = f"{n:,.2f}"
-            return s.replace(",", "X").replace(".", ",").replace("X", ".")
-        except Exception:
-            return "" if pd.isna(v) else str(v)
+            self.status_var.set(f"⏳ Carregando {label}...")
+            self.update()
+            df = func(path)
+            self.paths[chave] = path
+            n = len(df)
+            self.lbl_paths[chave].config(
+                text=f"✅ {os.path.basename(path)} ({n} reg.)")
+            self.status_var.set(f"✅ {label} carregado — {n} registros.")
+            return df
+        except Exception as e:
+            import traceback
+            messagebox.showerror("Erro",
+                f"Erro ao carregar {label}:\n{e}\n\n{traceback.format_exc()}")
+            return None
 
-    def _create_tree(self, parent, columns, headings=None, stretch_last=True):
-        frm = tk.Frame(parent, bg="#1e1e1e")
-        frm.pack(fill="both", expand=True)
-        xscroll = ttk.Scrollbar(frm, orient="horizontal")
-        yscroll = ttk.Scrollbar(frm, orient="vertical")
-        tree = ttk.Treeview(frm, columns=columns, show="headings",
-                            xscrollcommand=xscroll.set, yscrollcommand=yscroll.set)
-        xscroll.config(command=tree.xview)
-        yscroll.config(command=tree.yview)
-        tree.grid(row=0, column=0, sticky="nsew")
-        yscroll.grid(row=0, column=1, sticky="ns")
-        xscroll.grid(row=1, column=0, sticky="ew")
+    def _unificar_vendas(self):
+        partes = []
+        for chave in ("cupom", "nf", "recibo"):
+            df = getattr(self, f"_df_{chave}", None)
+            if df is not None and not df.empty:
+                partes.append(df)
+        if not partes:
+            return None
+        df = pd.concat(partes, ignore_index=True)
+        df["status"]     = "pendente"
+        df["par_banco"]  = ""
+        df["saldo_rest"] = df["valor"]
+        return df
 
-        frm.rowconfigure(0, weight=1)
-        frm.columnconfigure(0, weight=1)
+    def carregar_cupom(self):
+        df = self._carregar("cupom", ler_cupom_fiscal, "Cupom Fiscal")
+        if df is not None:
+            self._df_cupom = df
+            self._recarregar_vendas()
 
-        # Cabeçalhos
-        for c in columns:
-            head = (headings[c] if headings and c in headings else c)
-            tree.heading(c, text=head)
-            tree.column(c, width=140, stretch=True)
-        if stretch_last and columns:
-            tree.column(columns[-1], width=220, stretch=True)
+    def carregar_nf(self):
+        df = self._carregar("nf", ler_nota_fiscal, "Nota Fiscal")
+        if df is not None:
+            self._df_nf = df
+            self._recarregar_vendas()
 
-        # tags de cor por status
-        tree.tag_configure("ok", background="#133b2a")     # verde escuro
-        tree.tag_configure("warn", background="#3b1f13")   # laranja escuro
+    def carregar_recibo(self):
+        df = self._carregar("recibo", ler_recibos, "Recibos")
+        if df is not None:
+            self._df_recibo = df
+            self._recarregar_vendas()
 
-        return tree
+    def carregar_banco(self):
+        df = self._carregar("banco", ler_mov_cartao,
+                            "Extrato Cartões (XLSX)", eh_pdf=False)
+        if df is not None:
+            self.df_banco = df
+            self.atualizar_tabelas()
+            self.atualizar_resumo()
 
-    def _fill_tree(self, tree, df, money_cols=None, status_col=None):
-        for i in tree.get_children():
-            tree.delete(i)
-        if df is None or df.empty:
-            tree.insert("", "end", values=("–",) * len(tree["columns"]))
+    def _recarregar_vendas(self):
+        self.df_vendas = self._unificar_vendas()
+        self.limpar_selecao()
+        self.atualizar_tabelas()
+        self.atualizar_resumo()
+
+    # ─── Ações ────────────────────────────────────────────────────────────────
+
+    def conciliar_auto(self):
+        if self.df_vendas is None or self.df_banco is None:
+            messagebox.showwarning("Aviso",
+                "Carregue os relatórios de vendas e o extrato do banco primeiro.")
             return
-        money_cols = set(money_cols or [])
-        cols = list(tree["columns"])
-        for _, row in df.iterrows():
-            vals = []
-            for c in cols:
-                v = row.get(c, "")
-                v = self._fmt_brl(v) if c in money_cols else ("" if pd.isna(v) else v)
-                vals.append(v)
-            tags = []
-            if status_col:
-                st = str(row.get(status_col, "")).lower()
-                if st.startswith("sem pagamento"):
-                    tags.append("warn")
-                elif st.startswith("conciliado"):
-                    tags.append("ok")
-            tree.insert("", "end", values=vals, tags=tags)
+        self.status_var.set("⏳ Conciliando automaticamente...")
+        self.update()
+        self.df_vendas, self.df_banco = conciliar_automatico(
+            self.df_vendas, self.df_banco)
+        self.limpar_selecao()
+        self.atualizar_tabelas()
+        self.atualizar_resumo()
+        n_cv = (self.df_vendas["status"] == "conciliado").sum()
+        n_pv = (self.df_vendas["status"] == "pendente").sum()
+        n_cb = (self.df_banco["status"]  == "conciliado").sum()
+        n_pb = (self.df_banco["status"]  == "pendente").sum()
+        self.status_var.set(
+            f"🔄 Auto concluída — Vendas: ✅{n_cv} ❌{n_pv} | Banco: ✅{n_cb} ❌{n_pb}")
 
-    # ---------- UI principal ----------
-    def _create_widgets(self):
-        pad = {"padx": 12, "pady": 8}
+    def conciliar_manual(self):
+        if not self.sel_vendas or not self.sel_bancos:
+            messagebox.showwarning("Seleção incompleta",
+                "Selecione pelo menos uma VENDA e pelo menos um registro do extrato.")
+            return
+        tol = 0.01
+        for iv in self.sel_vendas:
+            for ib in self.sel_bancos:
+                sv = self.df_vendas.at[iv, "saldo_rest"]
+                sb = self.df_banco.at[ib, "saldo_rest"]
+                if sv <= tol or sb <= tol:
+                    continue
+                val = min(sv, sb)
+                par = f"M{iv}-{ib}"
+                def ap(df, idx, col, p):
+                    a = df.at[idx, col]
+                    df.at[idx, col] = f"{a},{p}" if a else p
+                ap(self.df_vendas, iv, "par_banco", par)
+                ap(self.df_banco,  ib, "par_venda", par)
+                self.df_vendas.at[iv, "saldo_rest"] = round(sv - val, 2)
+                self.df_banco.at[ib, "saldo_rest"]  = round(sb - val, 2)
 
-        # Linha de seleção de arquivos (dark style)
-        top = tk.Frame(self, bg="#1e1e1e")
-        top.pack(fill="x", padx=10, pady=10)
+        def novo_st_v(idx):
+            r = self.df_vendas.loc[idx]
+            if not r["par_banco"]: return "pendente"
+            return "conciliado" if r["saldo_rest"] <= tol else "parcial"
 
-        def make_file_row(row, label, on_select):
-            tk.Label(top, text=label, font=("Segoe UI", 10), bg="#1e1e1e", fg="#ffffff").grid(row=row, column=0, sticky="w", **pad)
-            btn = tk.Button(top, text="Selecionar...", command=on_select,
-                            font=("Segoe UI", 10), bg="#2e2e2e", fg="#ffffff",
-                            activebackground="#444444", activeforeground="#00bfff",
-                            relief="flat", bd=0, padx=10, pady=5)
-            btn.grid(row=row, column=1, **pad)
-            self._apply_brilho(btn)
-            lab = tk.Label(top, text="", font=("Segoe UI", 10),
-                           bg="#1e1e1e", fg="#ffffff")
-            lab.grid(row=row, column=2, sticky="w", **pad)
-            return lab
+        def novo_st_b(idx):
+            r = self.df_banco.loc[idx]
+            if not r["par_venda"]: return "pendente"
+            return "conciliado" if r["saldo_rest"] <= tol else "parcial"
 
-        self.lbl_cupom = make_file_row(0, "Cupom Fiscal:", self.select_cupom)
-        self.lbl_nf    = make_file_row(1, "Nota Fiscal:",   self.select_nf)
-        self.lbl_rec   = make_file_row(2, "Recibo:",       self.select_recibos)
-        self.lbl_pay   = make_file_row(3, "Pagamentos", self.select_pagamentos)
+        for iv in self.sel_vendas:
+            self.df_vendas.at[iv, "status"] = novo_st_v(iv)
+        for ib in self.sel_bancos:
+            self.df_banco.at[ib, "status"] = novo_st_b(ib)
 
-        # Botões de ação (sem Exportar Excel)
-        btn_bar = tk.Frame(self, bg="#1e1e1e")
-        btn_bar.pack(fill="x", padx=10, pady=4)
+        self.limpar_selecao()
+        self.atualizar_tabelas()
+        self.atualizar_resumo()
+        self.status_var.set("🤝 Conciliação manual aplicada.")
 
-        btn_run = tk.Button(btn_bar, text="Conciliar", command=self.run_conciliacao,
-                            font=("Segoe UI", 12), bg="#2e2e2e", fg="#ffffff",
-                            activebackground="#444444", activeforeground="#00bfff",
-                            relief="flat", bd=0, padx=12, pady=8)
-        btn_run.pack(side="left", padx=6)
-        self._apply_brilho(btn_run)
+    def desconciliar(self):
+        self._alterar_status_selecionados(None)
 
-        btn_clear = tk.Button(btn_bar, text="Limpar Seleções", command=self.limpar_selecoes,
-                              font=("Segoe UI", 12), bg="#8b0000", fg="#ffffff",
-                              activebackground="#E10000", activeforeground="#ffffff",
-                              relief="flat", bd=0, padx=12, pady=8)
-        btn_clear.pack(side="left", padx=6)
+    def ignorar(self):
+        self._alterar_status_selecionados("ignorado")
 
-        # Notebook de dashboards (substitui Log/Status)
-        body = tk.Frame(self, bg="#1e1e1e")
-        body.pack(fill="both", expand=True, padx=10, pady=10)
+    def _alterar_status_selecionados(self, novo_status):
+        for tree, df, col_par in [
+            (self.tree_v, self.df_vendas, "par_banco"),
+            (self.tree_b, self.df_banco,  "par_venda"),
+        ]:
+            if df is None:
+                continue
+            for item in tree.selection():
+                idx = self._item_id(tree, item)
+                if idx is None:
+                    continue
+                if novo_status is None:
+                    orig = df.at[idx, "valor"] if "valor" in df.columns else df.at[idx, "VALOR"]
+                    df.at[idx, "status"]     = "pendente"
+                    df.at[idx, col_par]      = ""
+                    df.at[idx, "saldo_rest"] = orig
+                else:
+                    df.at[idx, "status"] = novo_status
+        self.atualizar_tabelas()
+        self.atualizar_resumo()
+        acao = "desconciliados" if novo_status is None else "ignorados"
+        self.status_var.set(f"✔ Registros {acao}.")
 
-        self.nb = ttk.Notebook(body)
-        self.nb.pack(fill="both", expand=True)
+    # ─── Cliques ─────────────────────────────────────────────────────────────
 
-        self.tab_sum = tk.Frame(self.nb, bg="#1e1e1e")
-        self.tab_comp = tk.Frame(self.nb, bg="#1e1e1e")
-        self.tab_pay = tk.Frame(self.nb, bg="#1e1e1e")
-        self.nb.add(self.tab_sum, text="Sumário")
-        self.nb.add(self.tab_comp, text="Comparação")
-        self.nb.add(self.tab_pay, text="Pagamentos sem conciliação")
+    def _on_click_venda(self, event):
+        item = self.tree_v.identify_row(event.y)
+        if not item:
+            return
+        idx = self._item_id(self.tree_v, item)
+        if idx is None:
+            return
+        if idx in self.sel_vendas:
+            self.sel_vendas.remove(idx)
+        else:
+            self.sel_vendas.append(idx)
+        n = len(self.sel_vendas)
+        if n == 0:
+            self.lbl_sel_v.config(text="Venda: (nenhuma)")
+        elif n == 1:
+            row = self.df_vendas.loc[self.sel_vendas[0]]
+            self.lbl_sel_v.config(
+                text=f"Venda: R$ {row['valor']:,.2f} | {str(row['referencia'])[:30]}")
+        else:
+            soma = sum(self.df_vendas.at[i, "valor"] for i in self.sel_vendas)
+            self.lbl_sel_v.config(
+                text=f"Vendas: {n} selecionada(s) | Σ R$ {soma:,.2f}")
+        self._destacar()
 
-        # Métricas rápidas no topo do Sumário
-        header_sum = tk.Frame(self.tab_sum, bg="#1e1e1e")
-        header_sum.pack(fill="x")
-        self.lbl_metric = tk.Label(header_sum, text="Métricas: –",
-                                   font=("Segoe UI", 11, "bold"),
-                                   bg="#1e1e1e", fg="#ffffff")
-        self.lbl_metric.pack(side="left", padx=8, pady=6)
-
-        # Tabelas
-        self.tree_sum = self._create_tree(
-            self.tab_sum,
-            columns=["origem", "tipo_cartao", "status", "count", "sum"],
-            headings={"origem": "Origem", "tipo_cartao": "Tipo", "status": "Status",
-                      "count": "Qtde", "sum": "Valor (R$)"}
-        )
-        self.tree_comp = self._create_tree(
-            self.tab_comp,
-            columns=["origem", "doc", "tipo_cartao", "valor_venda", "valor_pagamento", "status", "diferenca"],
-            headings={"origem": "Origem", "doc": "Documento", "tipo_cartao": "Tipo",
-                      "valor_venda": "Venda (R$)", "valor_pagamento": "Pagamento (R$)",
-                      "status": "Status", "diferenca": "Diferença (R$)"},
-            stretch_last=True
-        )
-        # Inicial: cria com colunas mínimas; na atualização a gente recria se vierem outras
-        self.tree_pay = self._create_tree(
-            self.tab_pay,
-            columns=["tipo_cartao", "valor_bruto"],
-            headings={"tipo_cartao": "Tipo", "valor_bruto": "Valor (R$)"}
-        )
-
-    # ---------- Seletores ----------
-    def select_cupom(self):
-        paths = filedialog.askopenfilenames(title="Selecionar Cupom Fiscal (PDF)", filetypes=[("PDF", "*.pdf")])
-        if paths:
-            self.cupom_paths = list(paths)
-            self.lbl_cupom.config(text=f"{len(paths)} arquivo(s) selecionado(s)")
-
-    def select_nf(self):
-        paths = filedialog.askopenfilenames(title="Selecionar Nota Fiscal (PDF)", filetypes=[("PDF", "*.pdf")])
-        if paths:
-            self.nf_paths = list(paths)
-            self.lbl_nf.config(text=f"{len(paths)} arquivo(s) selecionado(s)")
-
-    def select_recibos(self):
-        paths = filedialog.askopenfilenames(title="Selecionar Recibos (PDF)", filetypes=[("PDF", "*.pdf")])
-        if paths:
-            self.recibos_paths = list(paths)
-            self.lbl_rec.config(text=f"{len(paths)} arquivo(s) selecionado(s)")
-
-    def select_pagamentos(self):
-        path = filedialog.askopenfilename(title="Selecionar Pagamentos (Excel/CSV)",
-                                          filetypes=[("Excel/CSV", "*.xlsx;*.xls;*.csv"),
-                                                     ("Excel", "*.xlsx;*.xls"),
-                                                     ("CSV", "*.csv")])
-        if path:
-            self.pagamentos_path = path
-            self.lbl_pay.config(text=re.split(r"[\\/]", path)[-1])
-
-    # ---------- Fluxo principal ----------
-    def run_conciliacao(self):
-        try:
-            # 1) Extrair vendas
-            vendas_frames = []
-            for p in self.cupom_paths:
-                df = parse_cupom_pdf(p)
-                vendas_frames.append(df)
-            for p in self.nf_paths:
-                df = parse_nf_pdf(p)
-                vendas_frames.append(df)
-            for p in self.recibos_paths:
-                df = parse_recibos_pdf(p)
-                vendas_frames.append(df)
-            if not vendas_frames:
-                messagebox.showwarning("Conciliação", "Nenhuma fonte de vendas selecionada.")
-                return
-            self.vendas_aggregadas = pd.concat(vendas_frames, ignore_index=True)
-
-            # 2) Pagamentos
-            if not self.pagamentos_path:
-                messagebox.showwarning("Conciliação", "Selecione o arquivo de pagamentos.")
-                return
-            self.pagamentos_df = load_pagamentos(self.pagamentos_path)
-
-            # 3) Conciliação
-
-            self.comparacao_df, self.pagamentos_sem_match, self.summary_matches = conciliar_vendas_pagamentos(
-                self.vendas_aggregadas, self.pagamentos_df, max_split=3, tol=0.01
-            )
-
-            conc = (self.comparacao_df["status"] == "Conciliado (valor + condição)").sum()
-            nao  = (self.comparacao_df["status"] == "Sem pagamento encontrado").sum()
-            sobra = len(self.pagamentos_sem_match)
-
-            # 4) Atualiza métricas
-            self.lbl_metric.config(
-                text=f"Métricas — Conciliadas: {conc} | Não encontradas: {nao} | Pagamentos sobrando: {sobra}"
-            )
-
-            # Sumário
-            df_sum = self.summary_matches.copy()
-            if not df_sum.empty:
-                df_sum.columns = ["origem", "tipo_cartao", "status", "count", "sum"]
-            self._fill_tree(self.tree_sum, df_sum, money_cols={"sum"}, status_col="status")
-
-            # Comparação
-            df_comp = self.comparacao_df.copy()
-            self._fill_tree(self.tree_comp, df_comp,
-                            money_cols={"valor_venda", "valor_pagamento", "diferenca"},
-                            status_col="status")
-
-            # Pagamentos sem conciliação (recria Treeview se as colunas forem diferentes)
-            df_pay = self.pagamentos_sem_match.copy()
-            if not df_pay.empty:
-                cols = list(df_pay.columns)
-                if set(cols) != set(self.tree_pay["columns"]):
-                    # destrói e recria com novas colunas
-                    for w in self.tab_pay.winfo_children():
-                        w.destroy()
-                    self.tree_pay = self._create_tree(
-                        self.tab_pay, columns=cols,
-                        headings={c: c.replace("_", " ").title() for c in cols}
-                    )
-                money_cols = {c for c in df_pay.columns if re.search(r"valor|bruto|total", c, flags=re.I)}
-                self._fill_tree(self.tree_pay, df_pay, money_cols=money_cols)
+    def _on_click_banco(self, event):
+        item = self.tree_b.identify_row(event.y)
+        if not item:
+            return
+        idx = self._item_id(self.tree_b, item)
+        if idx is None:
+            return
+        if self.sel_vendas:
+            if idx in self.sel_bancos:
+                self.sel_bancos.remove(idx)
             else:
-                self._fill_tree(self.tree_pay, df_pay)
+                self.sel_bancos.append(idx)
+            self.lbl_sel_b.config(
+                text=f"Banco: {len(self.sel_bancos)} selecionado(s)")
+        self._destacar()
 
-            messagebox.showinfo("Conciliação",
-                                f"Concluída.\nConciliadas: {conc}\nNão encontradas: {nao}\nPagamentos sobrando: {sobra}")
+    def _destacar(self):
+        if self.df_vendas is not None:
+            for item in self.tree_v.get_children():
+                idx = self._item_id(self.tree_v, item)
+                if idx is None: continue
+                tag = self.df_vendas.at[idx, "status"]
+                self.tree_v.item(item, tags=(tag,))
+            for iv in self.sel_vendas:
+                it = self._buscar_item(self.tree_v, iv)
+                if it:
+                    self.tree_v.item(it, tags=("selecionado",))
+        if self.df_banco is not None:
+            for item in self.tree_b.get_children():
+                idx = self._item_id(self.tree_b, item)
+                if idx is None: continue
+                tag = self.df_banco.at[idx, "status"]
+                self.tree_b.item(item, tags=(tag,))
+            for ib in self.sel_bancos:
+                it = self._buscar_item(self.tree_b, ib)
+                if it:
+                    self.tree_b.item(it, tags=("selecionado",))
 
-        except Exception as e:
-            messagebox.showerror("Erro", f"Falha na conciliação:\n{e}")
+    def limpar_selecao(self):
+        self.sel_vendas = []
+        self.sel_bancos = []
+        self.lbl_sel_v.config(text="Venda: (nenhuma)")
+        self.lbl_sel_b.config(text="Banco: (nenhum)")
 
-    
+    # ─── Tabelas ──────────────────────────────────────────────────────────────
 
-    def limpar_selecoes(self):
-        # limpa seleções
-        self.cupom_paths = []
-        self.nf_paths = []
-        self.recibos_paths = []
-        self.pagamentos_path = None
-        self.lbl_cupom.config(text="")
-        self.lbl_nf.config(text="")
-        self.lbl_rec.config(text="")
-        self.lbl_pay.config(text="")
+    def atualizar_tabelas(self):
+        self._popular_tree_vendas()
+        self._popular_tree_banco()
 
-        # zera dataframes
-        self.vendas_aggregadas = pd.DataFrame()
-        self.pagamentos_df = pd.DataFrame()
-        self.comparacao_df = pd.DataFrame()
-        self.pagamentos_sem_match = pd.DataFrame()
-        self.summary_matches = pd.DataFrame()
-
-        # limpa UI
-        self.lbl_metric.config(text="Métricas: –")
-        self._fill_tree(self.tree_sum, pd.DataFrame())
-        self._fill_tree(self.tree_comp, pd.DataFrame())
-        self._fill_tree(self.tree_pay, pd.DataFrame())
-
-    # === ATUALIZADO: run_conciliacao passa a preencher as abas ===
-    def run_conciliacao(self):
-        try:
-            # 1) Extrair vendas (Cupom, NF, Recibos)
-            vendas_frames = []
-            for p in self.cupom_paths:
-                df = parse_cupom_pdf(p)
-                vendas_frames.append(df)
-            for p in self.nf_paths:
-                df = parse_nf_pdf(p)
-                vendas_frames.append(df)
-            for p in self.recibos_paths:
-                df = parse_recibos_pdf(p)
-                vendas_frames.append(df)
-            if not vendas_frames:
-                messagebox.showwarning("Conciliação", "Nenhuma fonte de vendas selecionada.")
-                return
-            self.vendas_aggregadas = pd.concat(vendas_frames, ignore_index=True)
-
-            # 2) Pagamentos
-            if not self.pagamentos_path:
-                messagebox.showwarning("Conciliação", "Selecione o arquivo de pagamentos.")
-                return
-            self.pagamentos_df = load_pagamentos(self.pagamentos_path)
-
-            # 3) Conciliação
-            self.comparacao_df, self.pagamentos_sem_match, self.summary_matches = conciliar_vendas_pagamentos(
-                self.vendas_aggregadas, self.pagamentos_df
-            )
-            conc = (self.comparacao_df["status"] == "Conciliado (valor + condição)").sum()
-            nao = (self.comparacao_df["status"] == "Sem pagamento encontrado").sum()
-            sobra = len(self.pagamentos_sem_match)
-
-            # 4) Atualiza métricas e tabelas
-            self.lbl_metric.config(
-                text=f"Métricas — Conciliadas: {conc} | Não encontradas: {nao} | Pagamentos sobrando: {sobra}"
-            )
-
-            # Sumário
-            df_sum = self.summary_matches.copy()
-            if not df_sum.empty:
-                # renomeia colunas para bater com Treeview
-                df_sum.columns = ["origem", "tipo_cartao", "status", "count", "sum"]
-            self._fill_tree(self.tree_sum, df_sum, money_cols={"sum"}, status_col="status")
-
-            # Comparação (formata valores)
-            df_comp = self.comparacao_df.copy()
-            self._fill_tree(
-                self.tree_comp, df_comp,
-                money_cols={"valor_venda", "valor_pagamento", "diferenca"},
-                status_col="status"
-            )
-
-            # Pagamentos sem conciliação
-            df_pay = self.pagamentos_sem_match.copy()
-            # Se tiver colunas adicionais, recria Treeview com todas as colunas relevantes
-            if not df_pay.empty:
-                cols = [c for c in df_pay.columns if c not in ("", None)]
-                # reconstruir se diferente
-                if set(cols) != set(self.tree_pay["columns"]):
-                    # recria o tree com colunas novas
-                    for w in self.tab_pay.winfo_children():
-                        w.destroy()
-                    self.tree_pay = self._create_tree(
-                        self.tab_pay, columns=cols,
-                        headings={c: c.replace("_", " ").title() for c in cols}
-                    )
-                money_cols = {c for c in df_pay.columns if "valor" in c.lower() or "bruto" in c.lower()}
-                self._fill_tree(self.tree_pay, df_pay, money_cols=money_cols)
-            else:
-                self._fill_tree(self.tree_pay, df_pay)  # mostra "–"
-
-            messagebox.showinfo("Conciliação", f"Conciliação concluída.\nConciliadas: {conc}\nNão encontradas: {nao}\nPagamentos sobrando: {sobra}")
-
-        except Exception as e:
-            messagebox.showerror("Erro", f"Falha na conciliação: {e}")
-
-
-    def exportar_excel(self):
-        if self.comparacao_df.empty or self.vendas_aggregadas.empty or self.pagamentos_df.empty:
-            messagebox.showwarning("Exportar", "Execute a conciliação antes de exportar.")
+    def _popular_tree_vendas(self):
+        self._map_v  = {}
+        self._rmap_v = {}
+        self.tree_v.delete(*self.tree_v.get_children())
+        if self.df_vendas is None:
             return
-        dest = filedialog.asksaveasfilename(
-            title="Salvar Excel de Conciliação",
-            defaultextension=".xlsx",
-            filetypes=[("Excel", "*.xlsx")]
-        )
-        if not dest:
-            return
-        try:
-            export_excel_final(dest, self.comparacao_df, self.vendas_aggregadas, self.pagamentos_df,
-                               self.pagamentos_sem_match, self.summary_matches)
-            self.log(f"Excel exportado: {dest}")
-            messagebox.showinfo("Exportar", f"Excel exportado com sucesso:\n{dest}")
-        except Exception as e:
-            messagebox.showerror("Erro", f"Falha ao exportar: {e}")
-            self.log(f"Erro exportar: {e}")
+        df = self._filtrar_v(self.df_vendas)
+        for _, (idx, row) in enumerate(df.iterrows()):
+            vals = (
+                row.get("origem",     ""),
+                row.get("referencia", ""),
+                row.get("tipo",       ""),
+                f"{row['valor']:,.2f}",
+                f"{row['saldo_rest']:,.2f}",
+                str(row.get("descricao", ""))[:60],
+                row.get("status",    ""),
+                row.get("par_banco", ""),
+            )
+            st  = row.get("status", "pendente")
+            tag = st if st in ("conciliado","parcial","pendente","ignorado") else "pendente"
+            item = self.tree_v.insert("", "end", values=vals, tags=(tag,))
+            self._map_v[item]  = idx
+            self._rmap_v[idx]  = item
 
-if __name__ == "__main__":
-    app = ConciliacaoApp()
-    app.mainloop()
+    def _popular_tree_banco(self):
+        self._map_b  = {}
+        self._rmap_b = {}
+        self.tree_b.delete(*self.tree_b.get_children())
+        if self.df_banco is None:
+            return
+        df = self._filtrar_b(self.df_banco)
+        for _, (idx, row) in enumerate(df.iterrows()):
+            vals = (
+                str(row.get("DT_VENDA",  "")),
+                str(row.get("HR_VENDA",  "")),
+                str(row.get("CARTAO",    ""))[:22],
+                str(row.get("TIPO",      "")),
+                str(row.get("AUTHO",     "")),
+                str(row.get("CV",        "")),
+                str(row.get("TERMINAL",  "")),
+                str(row.get("PARCELAS",  "")),
+                f"{row['VALOR']:,.2f}",
+                f"{row['saldo_rest']:,.2f}",
+                row.get("status",    ""),
+                row.get("par_venda", ""),
+            )
+            st  = row.get("status", "pendente")
+            tag = st if st in ("conciliado","parcial","pendente","ignorado") else "pendente"
+            item = self.tree_b.insert("", "end", values=vals, tags=(tag,))
+            self._map_b[item]  = idx
+            self._rmap_b[idx]  = item
+
+    def _filtrar_v(self, df):
+        df = self._filtrar(df, "status")
+        ft = self.filtro_tipo.get()
+        if ft != "Todos" and "tipo" in df.columns:
+            df = df[df["tipo"] == ft]
+        return df
+
+    def _filtrar_b(self, df):
+        df = self._filtrar(df, "status")
+        ft = self.filtro_tipo.get()
+        if ft != "Todos" and "TIPO" in df.columns:
+            df = df[df["TIPO"] == ft]
+        return df
+
+    def _filtrar(self, df, col_status):
+        f = self.filtro_status.get()
+        if f == "Todos":
+            return df
+        return df[df[col_status] == f]
+
+    def atualizar_resumo(self):
+        if self.df_vendas is not None:
+            cnt = self.df_vendas["status"].value_counts()
+            self.lbl_res["v_total"].config(text=str(len(self.df_vendas)))
+            for s in ("conciliado", "parcial", "pendente", "ignorado"):
+                self.lbl_res[f"v_{s}"].config(text=str(cnt.get(s, 0)))
+            self.lbl_res["v_soma"].config(
+                text=f"R$ {self.df_vendas['valor'].sum():,.2f}")
+
+        if self.df_banco is not None:
+            cnt = self.df_banco["status"].value_counts()
+            self.lbl_res["b_total"].config(text=str(len(self.df_banco)))
+            self.lbl_res["b_conciliado"].config(text=str(cnt.get("conciliado", 0)))
+            self.lbl_res["b_pendente"].config(text=str(cnt.get("pendente", 0)))
+            soma_b = self.df_banco["VALOR"].sum()
+            self.lbl_res["b_soma"].config(text=f"R$ {soma_b:,.2f}")
+
+            if self.df_vendas is not None:
+                soma_v = self.df_vendas["valor"].sum()
+                dif    = soma_v - soma_b
+                cor    = COR_VERDE if abs(dif) < 0.05 else COR_VERMELHO
+                self.lbl_res["diferenca"].config(
+                    text=f"R$ {dif:,.2f}", fg=cor)
+
+    # ─── Helpers ─────────────────────────────────────────────────────────────
+
+    def _item_id(self, tree, item):
+        if tree == self.tree_v:
+            return self._map_v.get(item)
+        return self._map_b.get(item)
+
+    def _buscar_item(self, tree, idx):
+        if tree == self.tree_v:
+            return self._rmap_v.get(idx)
+        return self._rmap_b.get(idx)
