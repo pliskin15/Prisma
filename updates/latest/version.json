@@ -1,15 +1,15 @@
 {
-  "version": "3.3.2y",
-  "generated_at": "2026-04-27T13:08:15.259260Z",
+  "version": "4.0.0",
+  "generated_at": "2026-04-29T12:14:13.054070Z",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/files",
   "files": {
     "Prisma.exe": {
-      "size": 24130476,
-      "sha256": "31e0a15c9ff8defcb5ba72a821731ca233ceafdce3324fdb1a8667856afe64db"
+      "size": 24070045,
+      "sha256": "016d4b7694c33dcbb9147bce3745703b5f181b122d76890f1bc9db57b8efbe58"
     },
     "_internal/base_library.zip": {
       "size": 1402481,
-      "sha256": "5c81fbaa4c543f5e9c38eb162b265e709f2685003dcbeb7fefc62311fd60fc25"
+      "sha256": "4adfffdfbd6038d1f18984eeea3bb0317939494617d42089b0aaffbf8abda81a"
     },
     "_internal/libcrypto-3.dll": {
       "size": 5231984,
@@ -1430,10 +1430,6 @@
     "_internal/pandas/_libs/window/indexers.cp313-win_amd64.pyd": {
       "size": 145408,
       "sha256": "8302c09b2164e9887acd72a12196dc82674fb18b996e6724877329d80109057a"
-    },
-    "_internal/pandas.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll": {
-      "size": 575056,
-      "sha256": "a4c2229bdc2a2a630acdc095b4d86008e5c3e3bc7773174354f3da4f5beb9cde"
     },
     "_internal/pdfminer/py.typed": {
       "size": 0,
