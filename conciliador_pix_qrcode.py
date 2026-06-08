@@ -33,11 +33,11 @@ COR_LARANJA   = "#e67e22"
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _num(val):
-    """Converte string/float para float seguro. Suporta formato BR (1.234,56)."""
+
     if val is None:
         return 0.0
     s = str(val).strip()
-    # Formato BR: tem ponto como separador de milhar e vírgula como decimal
+
     if re.search(r"\d\.\d{3},\d", s):
         s = s.replace(".", "").replace(",", ".")
     else:
@@ -50,11 +50,7 @@ def _num(val):
 
 
 def _extrair_linhas_pdf(path):
-    """
-    Extrai todas as linhas de texto de um PDF usando pdfplumber.
-    Retorna lista de strings, uma por linha, preservando layout.
-    Usa extract_text com layout=True para manter alinhamento de colunas.
-    """
+
     linhas = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -65,11 +61,7 @@ def _extrair_linhas_pdf(path):
 
 
 def _ultimo_num_linha(linha):
-    """
-    Retorna o último número positivo de uma linha de texto.
-    É o valor na coluna mais à direita — o valor circulado nos relatórios.
-    """
-    # Encontra todos os padrões numéricos BR na linha
+
     tokens = re.findall(r"\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2}|\d+", linha)
     for tok in reversed(tokens):
         n = _num(tok)
@@ -77,26 +69,8 @@ def _ultimo_num_linha(linha):
             return n
     return 0.0
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PARSER: CUPOM FISCAL (PDF)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def ler_cupom_fiscal(path):
-    """
-    Lê o Relatório Cupom Fiscal (PDF).
 
-    Layout por cupom no texto extraído:
-      Linha A:  88425  88425  002  NORMAL  CPIX  4088  5.405  28,32  0,00  0,00  0,00  28,32  28,32
-      Linha B:  CODPOS  AUTORIZACAO  DOCUMENTO  SITUACAO  (opcional)
-      Linha C:  13846955  5465613213  6545464546  VINCULADO   (opcional)
-      Linha D:                              VENDA PIX                                           28,32
-                                            ^texto pgto                              ^valor circulado
-
-    Regra:
-    - Linha com número ≥5 dígitos no início → novo cupom, captura COND (5ª palavra) e VENDER (6ª)
-    - Linha contendo "VENDA PIX" mas NÃO "MAQUINETA" → pega último número = valor
-    """
     linhas = _extrair_linhas_pdf(path)
     registros = []
 
@@ -110,27 +84,33 @@ def ler_cupom_fiscal(path):
             continue
         up = linha_strip.upper()
 
-        # ── Linha principal do cupom ──────────────────────────────────────────
-        # Começa com número de 5+ dígitos seguido de espaço e mais números
         m = re.match(r"^(\d{5,})\s+\d{5,}\s+\d+\s+\w+\s+(\S+)\s+(\S+)", linha_strip)
         if m:
             cupom_atual  = m.group(1)
-            cond_atual   = m.group(2)   # ex: CPIX, CD, C4
-            vender_atual = m.group(3)   # código do vendedor
+            cond_atual   = m.group(2)
+            vender_atual = m.group(3)
             continue
 
-        # ── Linhas de totais/rodapé → resetar contexto de cupom ─────────────
-        # Palavras que indicam seção de totalizadores, não um cupom individual
-        if any(t in up for t in ["TOTAL GERAL", "TOTAL :", "TOTAL:",
-                                  "FILIAL :", "PERIODO", "EMISSAO",
-                                  "DESCRICAO", "TOTAIS", "CANCELADOS",
-                                  "SERVICOS", "VENDAS"]):
+        if any(t in up for t in [
+            "TOTAL GERAL", "TOTAL :", "TOTAL:",
+            "DESCRICAO", "TOTAIS", "CANCELADOS",
+            "SERVICOS", "VENDAS"
+        ]):
             cupom_atual = None
             continue
 
-        # ── Linha de pagamento VENDA PIX ─────────────────────────────────────
+        # ✅ headers de página NÃO zeram o cupom
+        if "RELATORIO CUPOM FISCAL" in up:
+            continue
+        if "FILIAL" in up and "PERIODO" in up:
+            continue
+        if "EMISSAO" in up:
+            continue
+
+
+
         if "VENDA PIX" in up and "MAQUINETA" not in up:
-            # Ignorar se não há cupom ativo (estamos numa seção de totais)
+
             if not cupom_atual:
                 continue
             valor = _ultimo_num_linha(linha_strip)
@@ -144,31 +124,13 @@ def ler_cupom_fiscal(path):
                     "status":     "pendente",
                     "par_banco":  "",
                 })
-                # Após registrar o pagamento PIX, resetar para não capturar
-                # uma segunda linha "VENDA PIX" de totais logo abaixo
+
                 cupom_atual = None
 
     return pd.DataFrame(registros)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PARSER: NOTA FISCAL (PDF)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def ler_nota_fiscal(path):
-    """
-    Lê o Relatório de Venda Avista — Notas Fiscais (PDF).
 
-    Layout por nota:
-      Linha A:  259837  091  41  3  61001002  JURANDIR GOMES PEREIRA FILHO  2AMPIX  275,00  0,00  0,00  275,00  5.405
-      Linha B:  CODPOS  AUTORIZACAO  DOCUMENTO  STATUS  (opcional)
-      Linha C:                    VENDA PIX                                  275,00
-                                  ^texto pgto                    ^valor circulado
-
-    Regra:
-    - Linha com número ≥5 dígitos no início + ao menos mais 2 números → nova nota
-    - Linha contendo "VENDA PIX" mas NÃO "MAQUINETA" → pega último número
-    """
     linhas = _extrair_linhas_pdf(path)
     registros = []
 
@@ -182,8 +144,6 @@ def ler_nota_fiscal(path):
             continue
         up = linha_strip.upper()
 
-        # ── Linha principal da nota ───────────────────────────────────────────
-        # Padrão: número_nota  serie  filial  tipo  cod_cliente  NOME_CLIENTE  COND  valor...
         m = re.match(r"^(\d{5,})\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s{2,}(\S+)\s+([\d\.,]+)", linha_strip)
         if m:
             nota_atual    = m.group(1)
@@ -191,19 +151,16 @@ def ler_nota_fiscal(path):
             cond_atual    = m.group(7).strip()
             continue
 
-        # Fallback: linha começa com 6+ dígitos e tem múltiplos campos numéricos
         if re.match(r"^\d{5,}\s", linha_strip):
             partes = linha_strip.split()
             nums_ini = sum(1 for p in partes[:5] if re.match(r"^\d+$", p))
             if nums_ini >= 3:
                 nota_atual    = partes[0]
-                # Cliente: palavras não-numéricas após os campos iniciais
                 cliente_atual = " ".join(p for p in partes[4:10]
                                          if not re.match(r"^[\d\.,]+$", p))
                 cond_atual    = ""
             continue
 
-        # ── Linha de pagamento VENDA PIX ─────────────────────────────────────
         if "VENDA PIX" in up and "MAQUINETA" not in up:
             valor = _ultimo_num_linha(linha_strip)
             if valor > 0 and nota_atual:
@@ -219,28 +176,8 @@ def ler_nota_fiscal(path):
 
     return pd.DataFrame(registros)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PARSER: RECIBOS (PDF)
-# ─────────────────────────────────────────────────────────────────────────────
 def ler_recibos(path):
-    """
-    Lê o Relatório de Recibos (PDF).
 
-    Layout de cada recibo:
-      Linha cabeçalho:  41  41043849  3  41002201  NOME CLIENTE  DEP. PIX QRCOD  TOTAL :  137,67
-      Linha DPP:        DPP  2419196399  2  137,67  127,46  8,21  0,00  2,00  0,00  0,00  0,00  0,00  137,67  0,00  0,00
-      Colunas DPP:      TIPO_DOC DOC SERIE RECEBIDO V.DOC JR.DOC JR.CART DESPESAS DINH. CHEQUE CART.DEB CART.CRED DEPOSITO ANTECIPADO DEVCAR
-
-    Regras:
-    - Linha iniciando com "41  <número>" → novo recibo; pega partes[1] como número do recibo
-    - Apenas recibos com "DEP. PIX QRCOD" ou "DEP. GETNET PIX" são capturados
-    - Linha DPP: DEPOSITO é o 13º campo (índice 12 de todos campos, índice 10 após DOC e SERIE)
-      Ordem:  [0]DPP [1]DOC [2]SERIE [3]RECEBIDO [4]V.DOC [5]JR.DOC [6]JR.CART
-              [7]DESPESAS [8]DINH. [9]CHEQUE [10]CART.DEB [11]CART.CRED [12]DEPOSITO [13]ANTECIPADO [14]DEVCAR
-    - Soma o DEPOSITO de todas as DPPs do mesmo recibo
-    - Expõe campos "referencia" e "valor" compatíveis com df_vendas
-    """
     linhas = _extrair_linhas_pdf(path)
 
     registros = []
@@ -250,51 +187,37 @@ def ler_recibos(path):
         linha_limpa = linha.strip()
         up = linha_limpa.upper()
 
-        # ── Detecta início de recibo ──────────────────────────────────────────
         m_recibo = re.match(r"^(\d+)\s+(\d+)\s+", linha_limpa)
         tem_texto_apos = bool(re.search(r"[A-Za-z]", linha_limpa.split(None, 2)[-1])) \
-                 if m_recibo else False
+                        if m_recibo else False
         if m_recibo and tem_texto_apos:
-
-            # Salva recibo anterior se tiver valor
             if recibo_atual and recibo_atual["valor"] > 0:
                 registros.append(recibo_atual)
             recibo_atual = None
 
-            # Só captura recibos com DEP. PIX QRCOD.
-            # DEP. GETNET PIX é uma forma de pagamento distinta e NÃO deve
-            # aparecer na lista de recibos PIX QR Code.
             if "DEP. PIX QRCOD" in up:
                 partes = linha_limpa.split()
-                numero_recibo = partes[1]   # número após o "41"
+                numero_recibo = partes[1]
 
-                # Extrai o TOTAL da linha de cabeçalho (último número)
                 total_cabecalho = _ultimo_num_linha(linha_limpa)
 
                 recibo_atual = {
                     "origem":     "Recibo",
                     "referencia": f"Recibo {numero_recibo}",
-                    "valor":      0.0,      # será somado pelas linhas DPP
+                    "valor":      0.0,
                     "descricao":  f"RECIBO PIX QRCOD | Recibo {numero_recibo}",
                     "status":     "pendente",
                     "par_banco":  "",
                 }
             continue
 
-        # ── Linhas DPP: soma coluna DEPOSITO (índice 12) ──────────────────────
-        if recibo_atual and up.startswith("DPP"):
-            # Extrai todos os números da linha na ordem em que aparecem
+        if recibo_atual and (up.startswith("DPP") or up.startswith("ANT")):
             nums = re.findall(r"\d{1,3}(?:\.\d{3})*,\d{2}", linha_limpa)
-            # Estrutura esperada (sem contar "DPP" e DOC/SERIE que são inteiros):
-            # Após DPP: DOC(int) SERIE(int) RECEBIDO V.DOC JR.DOC JR.CART DESPESAS DINH. CHEQUE CART.DEB CART.CRED DEPOSITO ANTECIPADO DEVCAR
-            # Os números com vírgula começam em RECEBIDO (índice 0 do findall)
-            # DEPOSITO é o 9º número com vírgula (índice 9)
             INDICE_DEPOSITO = 9
             if len(nums) > INDICE_DEPOSITO:
                 deposito = _num(nums[INDICE_DEPOSITO])
                 recibo_atual["valor"] = round(recibo_atual["valor"] + deposito, 2)
 
-    # Adiciona último recibo
     if recibo_atual and recibo_atual["valor"] > 0:
         registros.append(recibo_atual)
 
@@ -304,31 +227,13 @@ def ler_recibos(path):
     return df
 
 def ler_mov_pix(path):
-    """
-    Lê o Relatório de Movimentação PIX QRCOD — Banco (PDF).
 
-    Layout (texto extraído com layout=True):
-      Cabeçalho:  FILIAL  DT RECEB.  HR RECEB.  VENDEDOR  PEDIDO  TXID  DT ENVIO  HR ENVIO  VALOR
-      Dados:      41  14/04/2026  8,24  4088  4100889068  41000000004108890680114042026  14/04/2026  8,23  28,32
-
-    Estratégia:
-    - Detectar linha de cabeçalho pelo texto "TXID" e "VALOR"
-    - Registrar posições horizontais (x) de cada coluna pelo cabeçalho
-    - Para cada linha de dado subsequente, extrair os valores por posição x
-    - Ignorar linhas de rodapé (TOTAL, página, etc.)
-    """
     registros = []
 
-    # Colunas esperadas — ordem importa para definir faixas x
     COLUNAS = ["FILIAL", "DT_RECEB", "HR_RECEB", "VENDEDOR", "PEDIDO", "TXID",
                "DT_ENVIO", "HR_ENVIO", "VALOR"]
 
-    # Mapeamento: primeira palavra da coluna no cabeçalho → nome interno
-    # Colunas compostas (DT RECEB., HR RECEB., DT ENVIO, HR ENVIO) começam com DT/HR,
-    # então usamos a palavra seguinte para diferenciar.
-    # Estratégia: juntar palavras consecutivas da mesma linha e casar sequências.
     SEQUENCIAS = [
-        # (sequência de tokens upper, nome_coluna)
         (["DT", "RECEB."], "DT_RECEB"),
         (["HR", "RECEB."], "HR_RECEB"),
         (["DT", "ENVIO"],  "DT_ENVIO"),
@@ -340,20 +245,21 @@ def ler_mov_pix(path):
         (["VALOR"],        "VALOR"),
     ]
 
+    col_x_global = {}    # ← guarda o mapeamento de colunas entre páginas
+    faixas_global = {}
+
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
-            # Extrair palavras com suas posições x0 para mapear colunas
             words = page.extract_words()
             if not words:
                 continue
 
-            # Agrupar palavras por linha (y arredondado)
             linhas_words = {}
             for w in words:
                 y = round(float(w["top"]), 0)
                 linhas_words.setdefault(y, []).append(w)
 
-            col_x = {}   # nome_coluna → x0 da primeira palavra da coluna
+            col_x = {}
             header_y = None
 
             for y in sorted(linhas_words):
@@ -362,7 +268,6 @@ def ler_mov_pix(path):
                     header_y = y
                     ws_linha = sorted(linhas_words[y], key=lambda w: float(w["x0"]))
                     tokens = [w["text"].upper() for w in ws_linha]
-                    # Varrer tokens buscando cada sequência
                     for seq, col_nome in SEQUENCIAS:
                         for i in range(len(tokens) - len(seq) + 1):
                             if tokens[i:i+len(seq)] == seq:
@@ -371,38 +276,39 @@ def ler_mov_pix(path):
                                 break
                     break
 
-            if not col_x or header_y is None:
-                # Fallback: usar extract_text com layout e parsear por texto
+            # ── se encontrou cabeçalho nesta página, atualiza o mapeamento global
+            if col_x:
+                col_x_global = col_x
+                cols_ordenadas = sorted(col_x_global.items(), key=lambda kv: kv[1])
+                faixas_global = {}
+                for i, (col, x) in enumerate(cols_ordenadas):
+                    x_fim = cols_ordenadas[i+1][1] if i+1 < len(cols_ordenadas) else 9999
+                    faixas_global[col] = (x - 5, x_fim)
+
+            # ── se nem esta página nem nenhuma anterior tinha cabeçalho → fallback
+            if not col_x_global:
                 texto = page.extract_text(layout=True) or ""
                 _parsear_mov_pix_texto(texto, registros)
                 continue
 
-            # Ordenar colunas por posição x
-            cols_ordenadas = sorted(col_x.items(), key=lambda kv: kv[1])
-            # Para cada coluna, definir faixa x: de x_col até x_prox_col
-            faixas = {}
-            for i, (col, x) in enumerate(cols_ordenadas):
-                x_fim = cols_ordenadas[i+1][1] if i+1 < len(cols_ordenadas) else 9999
-                faixas[col] = (x - 5, x_fim)
+            # ── usa o mapeamento global (da página atual ou de página anterior)
+            y_inicio = header_y if header_y is not None else -1
 
-            # Processar linhas abaixo do cabeçalho
             for y in sorted(linhas_words):
-                if y <= header_y:
+                if y <= y_inicio:
                     continue
                 ws = linhas_words[y]
                 texto_linha = " ".join(w["text"] for w in ws).upper()
 
-                # Ignorar rodapés
                 if any(t in texto_linha for t in ["TOTAL", "PAGINA", "PÁGINA",
                                                    "EMPRESA", "FILIAL :", "PERIODO",
                                                    "RELATORIO", "EMISSAO"]):
                     continue
 
-                # Extrair valor de cada coluna pela posição x
                 reg = {c: "" for c in COLUNAS}
                 for w in ws:
                     wx = float(w["x0"])
-                    for col, (x_ini, x_fim) in faixas.items():
+                    for col, (x_ini, x_fim) in faixas_global.items():
                         if x_ini <= wx < x_fim:
                             reg[col] = (reg[col] + " " + w["text"]).strip()
                             break
@@ -410,7 +316,6 @@ def ler_mov_pix(path):
                 valor  = _num(reg.get("VALOR", ""))
                 txid   = reg.get("TXID",   "").strip()
                 pedido = reg.get("PEDIDO", "").strip()
-                # Rejeita linhas sem TXID e sem PEDIDO (rodapés/totais)
                 if valor > 0 and (txid or pedido):
                     registros.append({
                         "FILIAL":    reg.get("FILIAL",   ""),
@@ -456,18 +361,16 @@ def _parsear_mov_pix_texto(texto, registros):
                                   "PERIODO", "RELATORIO", "EMISSAO"]):
             continue
 
-        # Linha de dado: começa com número de filial (ex: 41)
-        # 9 campos: FILIAL  DT_RECEB  HR_RECEB  VENDEDOR  PEDIDO  TXID  DT_ENVIO  HR_ENVIO  VALOR
         m = re.match(
-            r"^\s*(\d{2})\s+"           # 1 FILIAL
-            r"(\d{2}/\d{2}/\d{4})\s+"  # 2 DT_RECEB
-            r"(\S+)\s+"                 # 3 HR_RECEB
-            r"(\S+)\s+"                 # 4 VENDEDOR
-            r"(\S+)\s+"                 # 5 PEDIDO
-            r"(\S+)\s+"                 # 6 TXID
-            r"\S+\s+"                   # 7 DT_ENVIO (ignorado)
-            r"\S+\s+"                   # 8 HR_ENVIO (ignorado)
-            r"([\d\.,]+)\s*$",          # 9 VALOR
+            r"^\s*(\d{2})\s+"
+            r"(\d{2}/\d{2}/\d{4})\s+"
+            r"(\S+)\s+"
+            r"(\S+)\s+"
+            r"(\S+)\s+"
+            r"(\S+)\s+"
+            r"\S+\s+"
+            r"\S+\s+"
+            r"([\d\.,]+)\s*$",
             linha.strip())
         if m:
             valor = _num(m.group(7))
@@ -486,9 +389,6 @@ def _parsear_mov_pix_texto(texto, registros):
                 })
             continue
 
-        # Fallback mais genérico: pega o último número da linha como VALOR.
-        # Exige data válida no 2º campo para evitar capturar linhas de rodapé
-        # (ex: número de página, totais parciais) que geram valores fantasmas.
         partes = linha.strip().split()
         if (len(partes) >= 6
                 and re.match(r"^\d{2}$", partes[0])
@@ -510,9 +410,6 @@ def _parsear_mov_pix_texto(texto, registros):
                 })
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONCILIAÇÃO AUTOMÁTICA
-# ─────────────────────────────────────────────────────────────────────────────
 
 def conciliar_automatico(df_vendas, df_banco, tolerancia=0.01):
     """
@@ -536,13 +433,11 @@ def conciliar_automatico(df_vendas, df_banco, tolerancia=0.01):
         par_counter[0] += 1
         return f"P{par_counter[0]:04d}"
 
-    # Indexar banco por valor para busca rápida
     for iv, row_v in dv.iterrows():
         saldo_v = dv.at[iv, "saldo_rest"]
         if saldo_v <= tolerancia:
             continue
 
-        # Candidatos no banco: valor == saldo_v (exato) ou valor <= saldo_v
         candidatos = db[
             (db["saldo_rest"] > tolerancia) &
             (abs(db["VALOR"] - saldo_v) <= tolerancia)
@@ -560,7 +455,6 @@ def conciliar_automatico(df_vendas, df_banco, tolerancia=0.01):
             db.at[ib, "par_venda"]  += ("," if db.at[ib,"par_venda"] else "") + par
             db.at[ib, "saldo_rest"]  = round(saldo_b - valor_match, 2)
 
-    # Calcular status
     def status_venda(row):
         if not row["par_banco"]:
             return "pendente"
@@ -616,15 +510,15 @@ class ConciliacaoPixApp(tk.Toplevel):
         bar.pack(fill="x")
         bar.pack_propagate(False)
 
-        tk.Label(bar, text="🔵  Conciliador PIX QRCODE — PMZ",
+        tk.Label(bar, text="🔵  Conciliador PIX QRCODE",
                  bg=COR_PAINEL, fg=COR_TEXTO,
                  font=("Segoe UI", 13, "bold")).pack(side="left", padx=16, pady=12)
 
         btns = [
-            ("🔄  Conciliar Auto",   COR_AZUL,    self.conciliar_auto),
-            ("🤝  Conciliar Manual", COR_VERDE,   self.conciliar_manual),
-            ("🔓  Desconciliar",     COR_AMARELO, self.desconciliar),
-            ("🚫  Ignorar",          COR_CINZA,   self.ignorar),
+            ("  Conciliar",   COR_AZUL,    self.conciliar_auto),
+            ("  Manual", COR_VERDE,   self.conciliar_manual),
+            ("  Desconciliar",     COR_AMARELO, self.desconciliar),
+            ("  Ignorar",          COR_CINZA,   self.ignorar),
         ]
         for txt, cor, cmd in btns:
             tk.Button(bar, text=txt, bg=cor, fg="white",
@@ -961,7 +855,7 @@ class ConciliacaoPixApp(tk.Toplevel):
         self.status_var.set("🤝 Conciliação manual aplicada.")
 
     def desconciliar(self):
-        self._alterar_status_selecionados(None)  # None = desconciliar
+        self._alterar_status_selecionados(None)
 
     def ignorar(self):
         self._alterar_status_selecionados("ignorado")
@@ -977,7 +871,7 @@ class ConciliacaoPixApp(tk.Toplevel):
                 idx = self._item_id(tree, item)
                 if idx is None:
                     continue
-                if novo_status is None:  # desconciliar
+                if novo_status is None:
                     orig = df.at[idx, "valor"] if "valor" in df.columns else df.at[idx, "VALOR"]
                     df.at[idx, "status"]    = "pendente"
                     df.at[idx, col_par]     = ""
@@ -989,7 +883,6 @@ class ConciliacaoPixApp(tk.Toplevel):
         acao = "desconciliados" if novo_status is None else "ignorados"
         self.status_var.set(f"✔ Registros {acao}.")
 
-    # ─── Cliques na tabela ────────────────────────────────────────────────────
 
     def _on_click_venda(self, event):
         item = self.tree_v.identify_row(event.y)
@@ -998,7 +891,6 @@ class ConciliacaoPixApp(tk.Toplevel):
         idx = self._item_id(self.tree_v, item)
         if idx is None:
             return
-        # Alterna seleção: clique novamente remove, clique novo adiciona
         if idx in self.sel_vendas:
             self.sel_vendas.remove(idx)
         else:
@@ -1033,7 +925,6 @@ class ConciliacaoPixApp(tk.Toplevel):
         self._destacar()
 
     def _destacar(self):
-        # Vendas
         if self.df_vendas is not None:
             for item in self.tree_v.get_children():
                 idx = self._item_id(self.tree_v, item)
@@ -1044,7 +935,6 @@ class ConciliacaoPixApp(tk.Toplevel):
                 it = self._buscar_item(self.tree_v, iv)
                 if it:
                     self.tree_v.item(it, tags=("selecionado",))
-        # Banco
         if self.df_banco is not None:
             for item in self.tree_b.get_children():
                 idx = self._item_id(self.tree_b, item)
@@ -1062,15 +952,14 @@ class ConciliacaoPixApp(tk.Toplevel):
         self.lbl_sel_v.config(text="Venda: (nenhuma)")
         self.lbl_sel_b.config(text="PIX banco: (nenhum)")
 
-    # ─── Atualização das tabelas ──────────────────────────────────────────────
 
     def atualizar_tabelas(self):
         self._popular_tree_vendas()
         self._popular_tree_banco()
 
     def _popular_tree_vendas(self):
-        self._map_v = {}  # item → idx
-        self._rmap_v = {} # idx → item
+        self._map_v = {}
+        self._rmap_v = {}
         self.tree_v.delete(*self.tree_v.get_children())
         if self.df_vendas is None:
             return
@@ -1145,7 +1034,6 @@ class ConciliacaoPixApp(tk.Toplevel):
                 self.lbl_res["diferenca"].config(
                     text=f"R$ {dif:,.2f}", fg=cor)
 
-    # ─── Helpers ─────────────────────────────────────────────────────────────
 
     def _item_id(self, tree, item):
         if tree == self.tree_v:
@@ -1156,3 +1044,4 @@ class ConciliacaoPixApp(tk.Toplevel):
         if tree == self.tree_v:
             return self._rmap_v.get(idx)
         return self._rmap_b.get(idx)
+

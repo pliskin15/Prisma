@@ -2446,6 +2446,24 @@ def iniciar_comparador_diario():
                 saida.insert(tk.END, f" Livro NFS: {_fmt(livro_nfs)}\n")
                 saida.insert(tk.END, f" Contab. NFS: {_fmt(cont_nfs)}\n\n")
 
+                        # ── SOMATÓRIA DO PERÍODO ──────────────────────────────────
+            total_livro_nfce = sum(livro_por_dia.get(d, {}).get("NFCE", 0.0) for d in todos_os_dias)
+            total_livro_nfs  = sum(livro_por_dia.get(d, {}).get("NFS",  0.0) for d in todos_os_dias)
+            total_cont_nfce  = sum(contabilidade_por_dia.get(d, {}).get("NFCE", 0.0) for d in todos_os_dias)
+            total_cont_nfs   = sum(contabilidade_por_dia.get(d, {}).get("NFS",  0.0) for d in todos_os_dias)
+
+            saida.insert(tk.END, "─" * 40 + "\n")
+            saida.insert(tk.END, "📊 SOMATÓRIA DO PERÍODO\n\n")
+            saida.insert(tk.END, f" Livro   NFCE total: {_fmt(total_livro_nfce)}\n")
+            saida.insert(tk.END, f" Contab. NFCE total: {_fmt(total_cont_nfce)}\n")
+            saida.insert(tk.END, f" Dif. NFCE:          {_fmt(total_livro_nfce - total_cont_nfce)}\n\n")
+            saida.insert(tk.END, f" Livro   NFS  total: {_fmt(total_livro_nfs)}\n")
+            saida.insert(tk.END, f" Contab. NFS  total: {_fmt(total_cont_nfs)}\n")
+            saida.insert(tk.END, f" Dif. NFS:           {_fmt(total_livro_nfs - total_cont_nfs)}\n\n")
+            saida.insert(tk.END, f" Livro   TOTAL:      {_fmt(total_livro_nfce + total_livro_nfs)}\n")
+            saida.insert(tk.END, f" Contab. TOTAL:      {_fmt(total_cont_nfce + total_cont_nfs)}\n")
+            saida.insert(tk.END, "─" * 40 + "\n\n")    
+
             divergencias = []
             for dia in todos_os_dias:
                 livro_nfce = livro_por_dia.get(dia, {}).get("NFCE", 0.0)
@@ -3049,60 +3067,55 @@ def _to_number_safe(col):
     return pd.to_numeric(s, errors='coerce')
 
 
-def calcular_dinheiro_remetido_core(caminho_excel: str, data_ini_str: str = "", data_fim_str: str = ""):
-    """
-    Replica a MESMA lógica e os MESMOS campos da 'tela de dinheiro remetido' de referência:
-      - Filtra rodapés/somatórios
-      - Aplica período opcional (dd/mm/aaaa)
-      - Lista por dia: remetido = soma(DÉBITO) - soma(CRÉDITO)
-      - Resumo:
-          * Total Anterior (coluna E), quando existir
-          * Total Saldo Final (coluna G), quando existir
-          * Total Remetido no Período (soma das linhas por dia)
+def calcular_dinheiro_remetido_core(caminho, ini_str='', fim_str=''):
+    import pandas as pd
+    from pandas.api.types import is_numeric_dtype
 
-    Retorna:
-      por_dia_df (DataFrame com colunas ['data','remetido'] já ordenado)
-      total_periodo (float)
-      total_anterior_val (float|None)
-      total_saldo_final_val (float|None)
-    """
-    if not caminho_excel:
-        raise ValueError("Informe o caminho do Excel.")
+    df = pd.read_excel(caminho, header=None)
 
-    # Tenta xlrd (xls). Se falhar, usa engine padrão (xlsx)
-    try:
-        df = pd.read_excel(caminho_excel, header=None, engine='xlrd')
-    except Exception:
-        df = pd.read_excel(caminho_excel, header=None)
-
-    # Colunas conforme a sua planilha
-    COL_DATA = 0
-    COL_HIST = 5
+    COL_DATA          = 0
+    COL_HISTORICO     = 5
     COL_CONTA_PARTIDA = 7
-    COL_DEBITO = 8
-    COL_CREDITO = 9
-    COL_E = 2
-    COL_G = 6
+    COL_DEBITO        = 8
+    COL_CREDITO       = 9
+    COL_E             = 2
+    COL_G             = 6
 
-    deb = _to_number_safe(df[COL_DEBITO])
-    cred = _to_number_safe(df[COL_CREDITO])
-    col_E = _to_number_safe(df[COL_E])
-    col_G = _to_number_safe(df[COL_G])
+    def to_number_safe(col):
+        if is_numeric_dtype(col):
+            return pd.to_numeric(col, errors='coerce')
+        s = (col.astype(str)
+                .str.strip()
+                .str.replace(r'[^\d,.\-]', '', regex=True))
+        has_comma = s.str.contains(',', regex=False)
+        has_dot   = s.str.contains('.', regex=False)
+        mask_both = has_comma & has_dot
+        s.loc[mask_both] = (s.loc[mask_both]
+                            .str.replace('.', '', regex=False)
+                            .str.replace(',', '.', regex=False))
+        mask_only_comma = has_comma & ~has_dot
+        s.loc[mask_only_comma] = s.loc[mask_only_comma].str.replace(',', '.', regex=False)
+        return pd.to_numeric(s, errors='coerce')
 
-    # Texto completo da linha p/ mascarar rodapés e totais
+    deb   = to_number_safe(df[COL_DEBITO])
+    cred  = to_number_safe(df[COL_CREDITO])
+    col_E = to_number_safe(df[COL_E])
+    col_G = to_number_safe(df[COL_G])
+
     linha_texto = (
         df.apply(lambda s: " ".join("" if pd.isna(v) else str(v) for v in s), axis=1)
-          .str.upper()
-          .str.strip()
+        .str.upper()
+        .str.strip()
     )
+    historico_col = df[COL_HISTORICO].astype(str).str.upper().str.strip()
 
-    # Cabeçalhos/rodapés/totalizações (iguais à referência)
-    mask_total_anterior = linha_texto.str.contains(r'\bTOTAL\s+ANTERIOR\b', regex=True, na=False)
+    # ── 1. Captura rodapés ──────────────────────────────────────────────────
+    mask_total_anterior = linha_texto.str.contains(r'\bTOTAL\s+ANTERIOR\b',     regex=True, na=False)
     mask_saldo_final    = linha_texto.str.contains(r'\bTOTAL\s+SALDO\s+FINAL\b', regex=True, na=False)
-    eh_dev_total        = linha_texto.str.contains(r'\bDEV\.?\s*TOTAL\b', regex=True, na=False)
+    eh_dev_total        = linha_texto.str.contains(r'\bDEV\.?\s*TOTAL\b',         regex=True, na=False)
 
-    total_anterior_val  = float(col_E.where(mask_total_anterior).sum()) if mask_total_anterior.any() else None
-    total_saldo_final_val = float(col_G.where(mask_saldo_final).sum()) if mask_saldo_final.any() else None
+    total_anterior_val    = float(col_E.where(mask_total_anterior).sum()) if mask_total_anterior.any() else None
+    total_saldo_final_val = float(col_G.where(mask_saldo_final).sum())    if mask_saldo_final.any()    else None
 
     padrao_rodape = (
         r'(?:^\s)TOTAL\s+ANTERIOR\b'
@@ -3112,28 +3125,24 @@ def calcular_dinheiro_remetido_core(caminho_excel: str, data_ini_str: str = "", 
     )
     eh_rodape = linha_texto.str.contains(padrao_rodape, regex=True, na=False) & ~eh_dev_total
 
-    # Só considera linhas com débito ou crédito E que não sejam rodapé
+    # ── 2. Identifica linhas "DINHEIRO REMETIDO" ───────────────────────────
+    mask_dr = historico_col.str.contains(r'DINHEIRO\s+REMETIDO', regex=True, na=False)
+
+    # ── 3. Exclui rodapés E linhas DR do cálculo ───────────────────────────
     mask_valor = ((deb.notna() & (deb != 0)) | (cred.notna() & (cred != 0)))
-    mask_valid = mask_valor & ~eh_rodape
+    mask_valid = mask_valor & ~eh_rodape & ~mask_dr
 
-    deb = deb.where(mask_valid, other=0.0).fillna(0.0)
-    cred = cred.where(mask_valid, other=0.0).fillna(0.0)
+    deb_calc  = deb.where(mask_valid, other=0.0).fillna(0.0)
+    cred_calc = cred.where(mask_valid, other=0.0).fillna(0.0)
 
-    # Datas → datetime
+    # ── 4. Filtro de datas ──────────────────────────────────────────────────
     datas_raw = df[COL_DATA]
-    if not pd.api.types.is_datetime64_any_dtype(datas_raw):
-        datas = pd.to_datetime(datas_raw, errors='coerce', dayfirst=True)
-    else:
-        datas = pd.to_datetime(datas_raw)
+    datas = (pd.to_datetime(datas_raw, errors='coerce', dayfirst=True)
+             if not pd.api.types.is_datetime64_any_dtype(datas_raw)
+             else pd.to_datetime(datas_raw))
 
-    # Período opcional
-    data_ini = pd.to_datetime(data_ini_str, dayfirst=True, errors='coerce') if data_ini_str else None
-    data_fim = pd.to_datetime(data_fim_str, dayfirst=True, errors='coerce') if data_fim_str else None
-
-    if data_ini_str and pd.isna(data_ini):
-        raise ValueError("Data inicial inválida. Use dd/mm/aaaa.")
-    if data_fim_str and pd.isna(data_fim):
-        raise ValueError("Data final inválida. Use dd/mm/aaaa.")
+    data_ini = pd.to_datetime(ini_str, dayfirst=True, errors='coerce') if ini_str else None
+    data_fim = pd.to_datetime(fim_str, dayfirst=True, errors='coerce') if fim_str else None
 
     mask_data = datas.notna()
     if data_ini is not None:
@@ -3141,32 +3150,63 @@ def calcular_dinheiro_remetido_core(caminho_excel: str, data_ini_str: str = "", 
     if data_fim is not None:
         mask_data &= datas <= data_fim
 
-    deb_f  = deb.where(mask_data,  other=0.0)
-    cred_f = cred.where(mask_data, other=0.0)
+    deb_filtrado  = deb_calc.where(mask_data, other=0.0)
+    cred_filtrado = cred_calc.where(mask_data, other=0.0)
 
     df_calc = pd.DataFrame({
-        "data": datas.dt.date,
-        "deb": deb_f,
-        "cred": cred_f,
-        "linha_txt": linha_texto
+        'data': datas.dt.date,
+        'deb':  deb_filtrado,
+        'cred': cred_filtrado,
     })
-    # Garante que só contemple linhas com movimentação
     df_calc = df_calc[df_calc['data'].notna() & ((df_calc['deb'] != 0) | (df_calc['cred'] != 0))]
-
-    mask_sucata = df_calc["linha_txt"].str.contains(r"\bSUCATA\b", na=False, regex=True)
-    sucata_total = float(df_calc.loc[mask_sucata, "cred"].sum())
 
     por_dia = (
         df_calc
         .groupby('data')
         .apply(lambda x: float(x['deb'].sum() - x['cred'].sum()))
         .reset_index(name='remetido')
-        .sort_values('data')
     )
-
     total_periodo = float(por_dia['remetido'].sum()) if not por_dia.empty else 0.0
-    return por_dia, total_periodo, total_anterior_val, total_saldo_final_val,sucata_total
 
+    # ── 5. Sucata ───────────────────────────────────────────────────────────
+    mask_sucata  = historico_col.str.contains(r'SUCATA', regex=True, na=False) & ~eh_rodape
+    sucata_deb   = deb.where(mask_sucata & mask_data, other=0.0).fillna(0.0)
+    sucata_cred  = cred.where(mask_sucata & mask_data, other=0.0).fillna(0.0)
+    sucata_total = float(sucata_deb.sum() - sucata_cred.sum())
+
+    # ── 6. Captura linhas "DINHEIRO REMETIDO" (no período) ─────────────────
+    mask_dr_periodo = mask_dr & mask_data
+    linhas_dr = []
+
+    if mask_dr_periodo.any():
+        for idx in df[mask_dr_periodo].index:
+            row = df.loc[idx]
+            linhas_dr.append({
+                'data':          pd.to_datetime(datas[idx]).strftime('%d/%m/%Y') if pd.notna(datas[idx]) else '',
+                'sequencia':     row[1],
+                'lote':          row[2],
+                'voucher':       row[3],
+                'doc_nro':       row[4],
+                'conta_partida': row[7],
+                'debito':        float(deb[idx])  if pd.notna(deb[idx])  else 0.0,
+                'credito':       float(cred[idx]) if pd.notna(cred[idx]) else 0.0,
+            })
+
+        valor_lancado_dr = sum(l['debito'] - l['credito'] for l in linhas_dr)
+        TOLERANCIA = 0.01
+        if abs(abs(valor_lancado_dr) - abs(total_periodo)) <= TOLERANCIA:
+            status_dr      = 'correto'
+            valor_ajustado = None
+        else:
+            status_dr      = 'divergente'
+            valor_ajustado = total_periodo
+    else:
+        valor_lancado_dr = None
+        valor_ajustado   = total_periodo
+        status_dr        = 'sem_lancamento'
+
+    return (por_dia, total_periodo, total_anterior_val, total_saldo_final_val,
+            sucata_total, valor_lancado_dr, valor_ajustado, status_dr, linhas_dr)
 
 def abrir_analise_memorando():
     import tkinter as tk
@@ -3278,7 +3318,9 @@ def abrir_analise_memorando():
         font=("Consolas", 10), insertbackground="#ffffff"
     )
     memo_saida.pack(padx=8, pady=8, fill="both", expand=True)
-
+    memo_saida.pack(padx=8, pady=8, fill="both", expand=True)
+    memo_saida.tag_configure("rem_ok",  foreground="#00cc66")   # verde: diferença > 1,50
+    memo_saida.tag_configure("rem_err", foreground="#ff4444")
     # Aba 2: Contabilidade
     aba_conf = tk.Frame(nb, bg="#1e1e1e")
     nb.add(aba_conf, text="Contabilidade")
@@ -3314,7 +3356,7 @@ def abrir_analise_memorando():
         font=("Consolas", 10), insertbackground="#ffffff"
     )
     conf_saida.pack(padx=8, pady=8, fill="both", expand=True)
-
+    conf_saida.tag_configure("div_red", background="", foreground="#ff6666")
     # =========================================================
     # Aba 3: Dinheiro Remetido (somente Excel, sem datas)
     # =========================================================
@@ -3349,6 +3391,9 @@ def abrir_analise_memorando():
         font=("Consolas", 10), insertbackground="#ffffff"
     )
     rem_saida.pack(padx=10, pady=8, fill="both", expand=True)
+    rem_saida.tag_configure("divergente", foreground="#ff4444")
+    rem_saida.tag_configure("correto", foreground="#00cc66")
+    rem_saida.tag_configure("divergente_sup", foreground="#00ff88", background="#1a3d2b")
 
 
     def _fmt_brl(v):
@@ -3364,14 +3409,13 @@ def abrir_analise_memorando():
                 messagebox.showwarning("Aviso", "Selecione o arquivo Excel antes de executar.")
                 return
 
-            # Chamamos o núcleo com strings vazias para data (sem filtro por período)
-            por_dia, total_periodo, total_anterior_val, total_saldo_final_val, sucata_total = \
+            por_dia, total_periodo, total_anterior_val, total_saldo_final_val, \
+            sucata_total, valor_lancado_dr, valor_ajustado, status_dr, linhas_dr = \
                 calcular_dinheiro_remetido_core(caminho, "", "")
 
-            # ——— Saída idêntica à tela referência ———
             rem_saida.delete("1.0", tk.END)
 
-            # 1) Totais (no topo), com ◊ e em MAIÚSCULAS
+            # 1) Rodapés capturados
             if total_anterior_val is not None:
                 rem_saida.insert(tk.END, f"◊ TOTAL ANTERIOR: {_fmt_brl(total_anterior_val)}\n")
             if total_saldo_final_val is not None:
@@ -3380,22 +3424,87 @@ def abrir_analise_memorando():
             rem_saida.insert(tk.END, f"◊ PAGAMENTO DE SUCATA (no período): {_fmt_brl(sucata_total)}\n")
             rem_saida.insert(tk.END, "\n")
 
-            # 2) Cabeçalho de lista diária
-            rem_saida.insert(tk.END, "Remetido por dia (Débito – Crédito):\n")
+            # ── Pré-calcula quais datas da parte superior têm divergência ──
+            # (compara remetido por dia vs. lançado na parte inferior)
+            TOLERANCIA = 0.01
+            datas_divergentes_sup = set()
+            if status_dr != 'sem_lancamento' and not por_dia.empty:
+                lancado_por_data = {}
+                for l in linhas_dr:
+                    valor_l = l['debito'] if l['debito'] != 0 else l['credito']
+                    lancado_por_data[l['data']] = lancado_por_data.get(l['data'], 0.0) + float(valor_l)
+                for _, r in por_dia.iterrows():
+                    d_fmt = pd.to_datetime(r['data']).strftime('%d/%m/%Y')
+                    esperado = float(r['remetido'])
+                    lancado = lancado_por_data.get(d_fmt)
+                    if lancado is None or abs(abs(lancado) - abs(esperado)) > TOLERANCIA:
+                        datas_divergentes_sup.add(d_fmt)
 
-            # 3) Linhas por dia
+            # 2) Remetido por dia
+            rem_saida.insert(tk.END, "Remetido por dia (Débito – Crédito):\n")
             if por_dia.empty:
                 rem_saida.insert(tk.END, " - (sem lançamentos no período)\n")
             else:
                 for _, r in por_dia.iterrows():
                     d = pd.to_datetime(r['data']).strftime('%d/%m/%Y')
                     v = float(r['remetido'])
-                    rem_saida.insert(tk.END, f" - {d}: {_fmt_brl(v)}\n")
+                    linha_sup = f" - {d}: {_fmt_brl(v)}\n"
+                    if d in datas_divergentes_sup:
+                        rem_saida.insert(tk.END, linha_sup, "divergente_sup")
+                    else:
+                        rem_saida.insert(tk.END, linha_sup)
 
             rem_saida.insert(tk.END, "\n")
-
-            # 4) Total do período (no rodapé), também com ◊
             rem_saida.insert(tk.END, f"◊ Total remetido no período: {_fmt_brl(total_periodo)}\n")
+            rem_saida.insert(tk.END, "\n")
+
+            # 3) Status do lançamento DINHEIRO REMETIDO
+            rem_saida.insert(tk.END, "─" * 55 + "\n")
+
+            if status_dr == 'sem_lancamento':
+                rem_saida.insert(tk.END,
+                    "⚠ Nenhum lançamento 'DINHEIRO REMETIDO' encontrado.\n"
+                    f"  👉 Valor a lançar: {_fmt_brl(valor_ajustado)}\n"
+                )
+            else:
+                rem_saida.insert(tk.END, "◊ DINHEIRO REMETIDO lançado:\n")
+
+                # Monta dicionário: data -> valor esperado (por_dia)
+                esperado_por_data = {}
+                for _, r in por_dia.iterrows():
+                    d_fmt = pd.to_datetime(r['data']).strftime('%d/%m/%Y')
+                    esperado_por_data[d_fmt] = float(r['remetido'])
+
+                for l in linhas_dr:
+                    sinal = "DEB" if l['debito'] != 0 else "CRED"
+                    valor = l['debito'] if l['debito'] != 0 else l['credito']
+                    valor_fmt = _fmt_brl(valor)
+                    linha_txt = (
+                        f"  {l['data']}  SEQ {l['sequencia']}  LOTE {l['lote']}  "
+                        f"VOUCHER {l['voucher']}  C.PARTIDA {l['conta_partida']}  "
+                        f"{sinal}: {valor_fmt}\n"
+                    )
+                    esperado = esperado_por_data.get(l['data'])
+                    if esperado is not None and abs(abs(valor) - abs(esperado)) <= TOLERANCIA:
+                        tag_linha = "correto"
+                    else:
+                        tag_linha = "divergente"
+
+                    prefixo = linha_txt[:linha_txt.rfind(valor_fmt)]
+                    rem_saida.insert(tk.END, prefixo)
+                    rem_saida.insert(tk.END, valor_fmt + "\n", tag_linha)
+
+                tag_total = "correto" if status_dr == 'correto' else "divergente"
+                rem_saida.insert(tk.END, "\n  Total lançado: ")
+                rem_saida.insert(tk.END, f"{_fmt_brl(valor_lancado_dr)}\n", tag_total)
+
+                if status_dr == 'correto':
+                    rem_saida.insert(tk.END, "  ✔ Valor confere com o calculado.\n", "correto")
+                else:
+                    rem_saida.insert(tk.END,
+                        f"\n  ✘ Valor correto (ajustado): {_fmt_brl(valor_ajustado)}\n"
+                        f"  Diferença: {_fmt_brl(abs(abs(valor_lancado_dr) - abs(valor_ajustado)))}\n"
+                    )
 
         except Exception as e:
             messagebox.showerror("Erro", f"Falha ao calcular Dinheiro Remetido:\n{e}")
@@ -3733,12 +3842,19 @@ def abrir_analise_memorando():
 
         memo_saida.insert(tk.END, "=== ANÁLISE DE REMESSAS ===\n\n")
         for k, vals in remessas.items():
-            memo_saida.insert(
-                tk.END,
+            dif_val = float(vals.get('Diferença', 0.0))
+            if dif_val > 1.50:
+                tag_rem = "rem_ok"
+            elif dif_val < -1.50:
+                tag_rem = "rem_err"
+            else:
+                tag_rem = ""
+            linha_rem = (
                 f"{k}: Remessa = {_fmt(vals.get('Remessa',0.0))} "
                 f"Saídas = {_fmt(vals.get('Saídas',0.0))} "
-                f"Diferença = {_fmt(vals.get('Diferença',0.0))}\n"
+                f"Diferença = {_fmt(dif_val)}\n"
             )
+            memo_saida.insert(tk.END, linha_rem, tag_rem)
 
         # ====== SALVAR NO ESTADO PARA A CONCILIAÇÃO ======
         memo_state["ok"] = True
@@ -3827,20 +3943,32 @@ def abrir_analise_memorando():
         try:
             df = pd.read_excel(caminho_excel, header=None, engine='xlrd')
             COL_HIST, COL_CONTA, COL_DEBITO = 5, 7, 8
-            conta_devol = 446
             formas_pagamento = { 6: "Dinheiro", 2157: "Cartão", 1253: "Cartão", 1179: "Cartão" }
             bloco_devol = False
             for _, row in df.iterrows():
-                texto_bloco = (("" if pd.isna(row[COL_CONTA]) else str(row[COL_CONTA])) + " " +
-                               ("" if pd.isna(row[COL_HIST]) else str(row[COL_HIST]))).upper()
-                if "446" in texto_bloco or "DEVOLU" in texto_bloco:
+                # ✅ Verifica SOMENTE a coluna de conta (col 7), não o histórico
+                # Isso evita falso positivo com NFs como "44680" que contêm "446"
+                col_conta_txt = ("" if pd.isna(row[COL_CONTA]) else str(row[COL_CONTA])).upper()
+
+                # Detecta cabeçalho real do bloco 446
+                if re.search(r'\b446\b', col_conta_txt) and "DEVOLU" in col_conta_txt:
                     bloco_devol = True
                     continue
+
+                # Fecha o bloco ao encontrar linha de total
+                if bloco_devol and ("TOTAL DEB" in col_conta_txt or "TOTAL CRED" in col_conta_txt):
+                    bloco_devol = False
+                    continue
+
+                # Detecta início de outro bloco (ex: 417, 418, etc.) → fecha 446
+                if bloco_devol and re.search(r'\b(41[0-9]|42[0-9]|43[0-9]|44[0-9]|45[0-9])\b', col_conta_txt):
+                    if re.search(r'\b(417|418|419|420|421|422|430)\b', col_conta_txt):
+                        bloco_devol = False
+                        continue
+
                 if not bloco_devol:
                     continue
-                cp = "" if pd.isna(row[COL_CONTA]) else str(row[COL_CONTA]).upper()
-                if "TOTAL DEB" in cp or "TOTAL CRED" in cp:
-                    continue
+
                 valor = pd.to_numeric(row[COL_DEBITO], errors="coerce")
                 if pd.isna(valor) or float(valor) == 0.0:
                     continue
@@ -4048,10 +4176,11 @@ def abrir_analise_memorando():
                 # 3) DEVOLUCAO A PRAZO: bloco 446, somar DEB, conta-partida = 1698
                 if bloco_atual == CONTA_DEVOL and not pd.isna(valor_deb) and float(valor_deb) != 0.0:
                     if conta_partida == CONTA_PARTIDA_PRAZO:
-                        resultados["devolucao_prazo"] += float(valor_deb)
+                        if "DEV." in desc_hist:
+                            resultados["devolucao_prazo"] += float(valor_deb)
 
                         # 4) DEVOLUCOES DO CLIENTE A PRAZO: mesmo critério + descrição contendo 'DEVOLUCOES DO CLIENTE'
-                        if "DEVOLUCOES DO CLIENTE" in desc_hist:
+                        if "VENDAS" in desc_hist:
                             resultados["devolucoes_cliente_prazo"] += float(valor_deb)
 
             return resultados
@@ -4063,34 +4192,26 @@ def abrir_analise_memorando():
 
     # Conciliação — sumarizador básico (mantido; mas vamos filtrar formas na exibição)
     def _sumarizar_contab_por_forma_e_tipo_basico(caminho_excel: str):
-        """
-        Consolida totais por FORMA e por TIPO (NFCE/NFS) a partir do Razão (Excel).
 
-        Ajustes importantes:
-        - Normaliza a forma "Nota Fiscal Depósito" (1677) -> "Depósito" para alinhar
-            com a chave do Memorando ("DEPOSITO").
-        - Força o TIPO de 1677 como "NFS".
-        - Mantém overrides já existentes (1575, 1022/430/Coligadas, 989/Depósito).
-        - Respeita CFOPS_EXCLUIDOS.
-        """
         por_forma_total, por_forma_tipo = {}, {}
+        primeira_linha = {}
+        linhas_por_forma_tipo = {}
+
         if not caminho_excel:
-            return por_forma_total, por_forma_tipo
+            return por_forma_total, por_forma_tipo, primeira_linha, linhas_por_forma_tipo
 
         try:
-            # Robustez: tenta xlrd (xls); se falhar, usa engine padrão
             try:
                 df = pd.read_excel(caminho_excel, header=None, engine="xlrd")
             except Exception:
                 df = pd.read_excel(caminho_excel, header=None)
 
-            # Colunas (layout já utilizado no app)
             COL_DOC  = 4
             COL_HIST = 5
             COL_CONTA = 7
             COL_CRED = 9
+            COL_SEQ = 1
 
-            # Mapa de formas (mantém o seu original)
             formas_pagamento = {
                 6: "Dinheiro",
                 11: "Pix QrCode",
@@ -4101,41 +4222,44 @@ def abrir_analise_memorando():
                 1253: "GoodCard",
                 1179: "Cartão Link",
                 989: "Depósito",
-                1677: "Nota Fiscal Depósito",  # <— será normalizado para "Depósito"
+                1677: "Nota Fiscal Depósito",
                 1575: "Transitórias",
             }
 
-            # Aliases para uniformizar o rótulo das formas no comparativo com o Memorando
-            
             alias_forma = {
-                "Nota Fiscal Depósito": "Depósito",  # 1677 -> "Depósito" (já existia)
-                "GoodCard": "Cartão",                # 1253 -> CARTÃO
-                "Cartão Link": "Cartão",             # 1179 -> CARTÃO
+                "Nota Fiscal Depósito": "Depósito",
+                "GoodCard": "Cartão",
+                "Cartão Link": "Cartão",
             }
 
+            bloco_atual = None
 
             for _, row in df.iterrows():
-                # Valor: coluna 9 (Crédito) no seu layout de vendas/recebimentos
+
+                # ===== DETECTA BLOCO =====
+                texto_bloco = (
+                    ("" if pd.isna(row[COL_CONTA]) else str(row[COL_CONTA])) + " " +
+                    ("" if pd.isna(row[COL_HIST]) else str(row[COL_HIST]))
+                ).upper()
+
+                m = re.search(r'\b(4\d{2})\s*-', texto_bloco)
+                if m:
+                    bloco_atual = int(m.group(1))
+
+                # ===== VALOR =====
                 valor = pd.to_numeric(row[COL_CRED], errors="coerce")
                 if pd.isna(valor) or float(valor) == 0.0:
                     continue
 
-                # Texto da linha inteiro (para CFOPs e heurísticas)
                 linha_txt = " ".join(str(x) for x in row.values).upper()
-
-                # Ignora CFOPs excluídos
                 if any(cfop in linha_txt for cfop in CFOPS_EXCLUIDOS):
                     continue
 
-                doc_raw  = row[COL_DOC]
+                doc_raw   = row[COL_DOC]
                 conta_txt = row[COL_CONTA]
-
-                # Extrai número da conta-partida da coluna 7 (robusto)
                 conta_num = _extrair_conta_partida_texto(conta_txt)
 
-                # === REGRAS DE TIPO (NFCE/NFS) ===
-
-                # Regra especial 1575: usa padrão "numero - xxx -"
+                # ===== TIPO =====
                 def _nf_por_1575(doc_str):
                     try:
                         s = str(doc_str)
@@ -4144,7 +4268,7 @@ def abrir_analise_memorando():
                             return None
                         codigo = int(m2.group(2))
                         return "NFCE" if codigo < 25 else "NFS"
-                    except Exception:
+                    except:
                         return None
 
                 texto_val = unidecode(str(conta_txt) if conta_txt is not None else "").upper()
@@ -4154,48 +4278,67 @@ def abrir_analise_memorando():
                 elif "COLIGADAS" in linha_txt or (conta_num in (1022, 430)):
                     tipo = "NFS"
                 elif conta_num == 989 or "DEPOSITO" in texto_val:
-                    # Depósitos avulsos costumam ser NFCE no seu fluxo original
                     tipo = "NFCE"
                 else:
-                    # Heurística padrão por DOC (último número; 1..100 => NFCE, senão NFS)
                     toks = re.findall(r'\d+', str(doc_raw))
                     if toks:
                         try:
                             nro = int(toks[-1])
                             tipo = "NFCE" if 1 <= nro <= 100 else "NFS"
-                        except Exception:
+                        except:
                             tipo = "NFS"
                     else:
                         tipo = "NFS"
 
-                # === OVERRIDE ESPECÍFICO: 1677 É SEMPRE NFS ===
                 if conta_num == 1677:
                     tipo = "NFS"
 
-                # Forma base pela conta-partida
+                # ===== FORMA NORMALIZADA (AGORA CERTO PRA MATCH) =====
                 forma_base = formas_pagamento.get(conta_num, "Outros")
-                # Normalização de rótulo para alinhar com o memorando
                 forma_norm = alias_forma.get(forma_base, forma_base)
 
-                # Acumula
+                # 🔥 NORMALIZA DEFINITIVO (evita erro de Cartão)
+                if forma_norm in ("GoodCard", "Cartão Link"):
+                    forma_norm = "Cartão"
+
+                # ===== ACUMULA =====
                 por_forma_total[forma_norm] = por_forma_total.get(forma_norm, 0.0) + float(valor)
                 por_forma_tipo.setdefault(forma_norm, {"NFCE": 0.0, "NFS": 0.0})
-                por_forma_tipo[forma_norm][tipo] = por_forma_tipo[forma_norm].get(tipo, 0.0) + float(valor)
+                por_forma_tipo[forma_norm][tipo] += float(valor)
 
-            return por_forma_total, por_forma_tipo
+                # ===== GUARDA TODAS AS LINHAS (AGORA FUNCIONA 100%) =====
+                linhas_por_forma_tipo \
+                    .setdefault(forma_norm, {}) \
+                    .setdefault(tipo, []) \
+                    .append({
+                        "valor": float(valor),
+                        "seq": str(row[COL_SEQ]).strip() if not pd.isna(row[COL_SEQ]) else "—"
+                    })
+
+                # ===== PRIMEIRA LINHA (419 / 422) =====
+                if bloco_atual in (419, 422):
+                    if forma_norm not in primeira_linha:
+                        seq = str(row[COL_SEQ]).strip() if not pd.isna(row[COL_SEQ]) else "—"
+                        primeira_linha[forma_norm] = (seq, float(valor))
+
+            return por_forma_total, por_forma_tipo, primeira_linha, linhas_por_forma_tipo
 
         except Exception as e:
             try:
                 messagebox.showerror("Erro", f"Falha ao ler a contabilidade (básico):\n{e}")
-            except Exception:
+            except:
                 print("Falha ao ler a contabilidade (básico):", e)
-            return {}, {}
+            return {}, {}, {}, {}
 
     # ============================
     # Conciliação — Execução
     # ============================
 
     def executar_conciliacao():
+        def _ins_div(texto, c_val, m_val, tolerancia=0.01):
+            """Insere linha no conf_saida; se houver divergência, pinta de vermelho."""
+            tag = "div_red" if abs(c_val - m_val) > tolerancia else ""
+            conf_saida.insert(tk.END, texto, tag)        
         conf_saida.delete("1.0", tk.END)
 
         if not memo_state["ok"]:
@@ -4208,7 +4351,7 @@ def abrir_analise_memorando():
         # ====================================================
         # (A) Por FORMA/TIPO – leitura básica
         # ====================================================
-        por_forma_total_b, por_forma_tipo_b = _sumarizar_contab_por_forma_e_tipo_basico(caminho_excel)
+        por_forma_total_b, por_forma_tipo_b, primeira_linha_b, linhas_por_forma_tipo = _sumarizar_contab_por_forma_e_tipo_basico(caminho_excel)
 
         # --- NFCE ---
         FORMAS_EXCLUIDAS = {"GoodCard", "Coligadas", "Cartão Link"}
@@ -4275,6 +4418,7 @@ def abrir_analise_memorando():
 
             conf_saida.insert(tk.END, f"{contab_key:>22} (Contab): {_fmt(v_cont)}\n")
             conf_saida.insert(tk.END, f"{memo_key:>22} (Memorando): {_fmt(v_memo)}\n")
+            
             conf_saida.insert(tk.END, f"{('Δ ' + contab_key):>22}: {_fmt(v_cont - v_memo)}\n\n")
 
         # ====================================================
@@ -4300,10 +4444,46 @@ def abrir_analise_memorando():
             m_nota  = float((vendas_memo.get(memo_key, {}) or {}).get("Nota", 0.0))
 
             if any([c_nfce_f, c_nfs_f, m_cupom, m_nota]):
+                delta_nfce = c_nfce_f - m_cupom
+                delta_nfs  = c_nfs_f  - m_nota
+            
                 conf_saida.insert(tk.END, f"[{contab_key}]\n")
-                conf_saida.insert(tk.END, f" NFCE (Contab): {_fmt(c_nfce_f)}   | Cupom (Memo): {_fmt(m_cupom)}   | Δ: {_fmt(c_nfce_f - m_cupom)}\n")
-                conf_saida.insert(tk.END, f" NFS (Contab):  {_fmt(c_nfs_f)}   | Nota (Memo):  {_fmt(m_nota)}    | Δ: {_fmt(c_nfs_f - m_nota)}\n\n")
+                conf_saida.insert(tk.END, f" NFCE (Contab): {_fmt(c_nfce_f)}   | Cupom (Memo): {_fmt(m_cupom)}   | Δ: {_fmt(delta_nfce)}\n")
 
+                if abs(delta_nfce) > 0.01 and contab_key in primeira_linha_b:
+
+                    seq, val_seq = primeira_linha_b[contab_key]
+                    valor_ajustado = val_seq - delta_nfce
+
+                    conf_saida.insert(
+                        tk.END,
+                        f" ↳ 1ª linha (NFCE) — Sequência: {seq} | "
+                        f"Valor: {_fmt(val_seq)} | Ajustado: {_fmt(valor_ajustado)}\n",
+                        "div_red"
+                    )
+
+                conf_saida.insert(tk.END, f" NFS (Contab):  {_fmt(c_nfs_f)}   | Nota (Memo):  {_fmt(m_nota)}    | Δ: {_fmt(delta_nfs)}\n")
+                # 🔥 BUSCA AUTOMÁTICA DA LINHA (QUANDO SOBRA NA CONTABILIDADE)
+                match = None
+
+                if delta_nfs > 0:
+                    for tipo_busca in ("NFS", "NFCE"):  # busca nos dois tipos
+                        for item in linhas_por_forma_tipo.get(contab_key, {}).get(tipo_busca, []):
+                            if abs(item["valor"] - delta_nfs) < 0.01:
+                                match = item
+                                break
+                        if match:
+                            break
+
+                # ✅ EXIBE SE ENCONTRAR
+                if match:
+                    conf_saida.insert(
+                        tk.END,
+                        f" ✔ Linha correspondente encontrada — Sequência: {match['seq']} | Valor: {_fmt(match['valor'])}\n"
+                    )
+                
+
+                conf_saida.insert(tk.END, "\n")
         # ====================================================
         # (D) DEVOLUÇÕES — DETALHADO (446 / DÉBITO)
         # ====================================================
@@ -4321,13 +4501,25 @@ def abrir_analise_memorando():
         m_dev_din = float(memo_state.get("devol_memo_dinheiro", 0.0))
         m_dev_car = float(memo_state.get("devol_memo_cartao", 0.0))
 
+        delta_dev_din = c_dev_din - m_dev_din
+        delta_dev_car = c_dev_car - m_dev_car
+
         conf_saida.insert(tk.END, f"Devolução (Dinheiro) — Contab: {_fmt(c_dev_din)}\n")
         conf_saida.insert(tk.END, f"Devolução (Dinheiro) — Memo  : {_fmt(m_dev_din)}\n")
-        conf_saida.insert(tk.END, f"Δ Dinheiro (Devolução): {_fmt(c_dev_din - m_dev_din)}\n\n")
+        conf_saida.insert(tk.END, f"Δ Dinheiro (Devolução): {_fmt(delta_dev_din)}\n\n")
 
         conf_saida.insert(tk.END, f"Devolução (Cartão) — Contab: {_fmt(c_dev_car)}\n")
         conf_saida.insert(tk.END, f"Devolução (Cartão) — Memo  : {_fmt(m_dev_car)}\n")
-        conf_saida.insert(tk.END, f"Δ Cartão (Devolução): {_fmt(c_dev_car - m_dev_car)}\n")
+        conf_saida.insert(tk.END, f"Δ Cartão (Devolução): {_fmt(delta_dev_car)}\n")
+
+        # 🔥 ALERTA POP-UP
+        if abs(delta_dev_din) > 0.01 or abs(delta_dev_car) > 0.01:
+            messagebox.showwarning(
+                "Alerta de Divergência",
+                "⚠️ Foi identificada diferença nas devoluções.\n\n"
+                f"Dinheiro: {_fmt(delta_dev_din)}\n"
+                f"Cartão: {_fmt(delta_dev_car)}"
+            )
 
         # ====================================================
         # (E)  NOVA ETAPA — "A PRAZO"
@@ -4353,10 +4545,32 @@ def abrir_analise_memorando():
             ("Devoluções Cliente Prazo", c_dcp, m_dcp),
         ]
 
+
+        tem_diferenca_prazo = False
+        mensagem_alerta = ""
+
         for rot, c_val, m_val in linhas:
+            delta = c_val - m_val
+
             conf_saida.insert(tk.END, f"{rot} — Contab: {_fmt(c_val)}\n")
             conf_saida.insert(tk.END, f"{rot} — Memo  : {_fmt(m_val)}\n")
-            conf_saida.insert(tk.END, f"Δ {rot}: {_fmt(c_val - m_val)}\n\n")
+            conf_saida.insert(tk.END, f"Δ {rot}: {_fmt(delta)}\n\n",
+                              "div_red" if abs(delta) > 0.01 else "")
+
+            # 🔥 Só alerta para devoluções específicas
+            if rot in ("Devolução a Prazo", "Devoluções Cliente Prazo"):
+                if abs(delta) > 0.01:
+                    tem_diferenca_prazo = True
+                    mensagem_alerta += f"{rot}: {_fmt(delta)}\n"
+
+        # 🔥 ALERTA APENAS PARA DEVOLUÇÕES A PRAZO
+        if tem_diferenca_prazo:
+            messagebox.showwarning(
+                "Alerta de Divergência - Devolução a Prazo",
+                "⚠️ Diferença identificada nas devoluções a prazo.\n\n"
+                + mensagem_alerta
+            )
+
 
 
     # Botões da Aba 2

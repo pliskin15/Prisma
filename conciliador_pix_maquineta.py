@@ -237,7 +237,7 @@ def ler_recibos(path):
             continue
 
         # ── Linhas DPP: soma coluna DEPOSITO (índice 9 dos valores com vírgula) ─
-        if recibo_atual and up.startswith("DPP"):
+        if recibo_atual and (up.startswith("DPP") or up.startswith("ANT")):
             nums = re.findall(r"\d{1,3}(?:\.\d{3})*,\d{2}", linha_limpa)
             INDICE_DEPOSITO = 9
             if len(nums) > INDICE_DEPOSITO:
@@ -427,15 +427,15 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
         bar.pack(fill="x")
         bar.pack_propagate(False)
 
-        tk.Label(bar, text="🟠  Conciliador PIX MAQUINETA — PMZ",
+        tk.Label(bar, text="🟠  Conciliador PIX MAQUINETA",
                  bg=COR_PAINEL, fg=COR_TEXTO,
                  font=("Segoe UI", 13, "bold")).pack(side="left", padx=16, pady=12)
 
         btns = [
-            ("🔄  Conciliar Auto",   COR_AZUL,    self.conciliar_auto),
-            ("🤝  Conciliar Manual", COR_VERDE,   self.conciliar_manual),
-            ("🔓  Desconciliar",     COR_AMARELO, self.desconciliar),
-            ("🚫  Ignorar",          COR_CINZA,   self.ignorar),
+            ("  Conciliar",   COR_AZUL,    self.conciliar_auto),
+            ("  Manual", COR_VERDE,   self.conciliar_manual),
+            ("  Desconciliar",     COR_AMARELO, self.desconciliar),
+            ("  Ignorar",          COR_CINZA,   self.ignorar),
         ]
         for txt, cor, cmd in btns:
             tk.Button(bar, text=txt, bg=cor, fg="white",
@@ -887,7 +887,7 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
         self.tree_v.delete(*self.tree_v.get_children())
         if self.df_vendas is None:
             return
-        df = self._filtrar(self.df_vendas, "status")
+        df = self._filtrar(self.df_vendas, "status", tabela="vendas")
         for _, (idx, row) in enumerate(df.iterrows()):
             vals = (
                 row.get("origem",     ""),
@@ -910,7 +910,7 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
         self.tree_b.delete(*self.tree_b.get_children())
         if self.df_banco is None:
             return
-        df = self._filtrar(self.df_banco, "status")
+        df = self._filtrar(self.df_banco, "status", tabela="banco")
         for _, (idx, row) in enumerate(df.iterrows()):
             vals = (
                 str(row.get("DT_RECEB",  "")),
@@ -929,11 +929,32 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
             self._map_b[item]  = idx
             self._rmap_b[idx]  = item
 
-    def _filtrar(self, df, col_status):
-        f = self.filtro_status.get()
-        if f == "Todos":
-            return df
-        return df[df[col_status] == f]
+    def _filtrar(self, df, col_status, tabela="vendas"):
+        result = df.copy()
+
+        if tabela == "vendas":
+            f_status = self.filtro_status_v.get()
+            f_valor  = self.filtro_valor_v.get().strip()
+        else:
+            f_status = self.filtro_status_b.get()
+            f_valor  = self.filtro_valor_b.get().strip()
+            f_data   = self.filtro_data_b.get().strip()
+            if f_data:
+                result = result[result["DT_RECEB"].astype(str).str.contains(f_data, na=False)]
+
+        if f_status != "Todos":
+            result = result[result[col_status] == f_status]
+
+        if f_valor:
+            try:
+                v = float(f_valor.replace(",", "."))
+                col_v = "valor" if tabela == "vendas" else "VALOR"
+                result = result[abs(result[col_v] - v) < 0.01]
+            except ValueError:
+                pass
+
+        return result
+
 
     def atualizar_resumo(self):
         if self.df_vendas is not None:
@@ -958,6 +979,282 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
                 cor    = COR_VERDE if abs(dif) < 0.05 else COR_VERMELHO
                 self.lbl_res["diferenca"].config(
                     text=f"R$ {dif:,.2f}", fg=cor)
+
+    # ─── Exportação ──────────────────────────────────────────────────────────
+
+    def exportar(self):
+        """Abre janela para informar o número da loja e exporta resumo em XLSX."""
+        if self.df_vendas is None and self.df_banco is None:
+            messagebox.showwarning("Aviso", "Carregue pelo menos um relatório antes de exportar.")
+            return
+
+        # ── Janela para número da loja ────────────────────────────────────────
+        dlg = tk.Toplevel(self)
+        dlg.title("Exportar Relatório")
+        dlg.geometry("340x160")
+        dlg.resizable(False, False)
+        dlg.configure(bg=COR_PAINEL)
+        dlg.grab_set()
+        dlg.transient(self)
+
+        tk.Label(dlg, text="Número da Loja:", bg=COR_PAINEL, fg=COR_TEXTO,
+                 font=("Segoe UI", 10, "bold")).pack(pady=(20, 4))
+        entry_loja = tk.Entry(dlg, font=("Segoe UI", 11), width=14,
+                               bg=COR_BG, fg=COR_TEXTO, insertbackground=COR_TEXTO,
+                               relief="flat", justify="center")
+        entry_loja.pack(pady=4)
+        entry_loja.focus_set()
+
+        resultado = {"loja": None}
+
+        def confirmar(event=None):
+            v = entry_loja.get().strip()
+            if not v:
+                messagebox.showwarning("Aviso", "Informe o número da loja.", parent=dlg)
+                return
+            resultado["loja"] = v
+            dlg.destroy()
+
+        entry_loja.bind("<Return>", confirmar)
+        tk.Button(dlg, text="Exportar", bg=COR_ACENTO, fg="white",
+                  font=("Segoe UI", 9, "bold"), relief="flat",
+                  padx=16, pady=6, cursor="hand2",
+                  command=confirmar).pack(pady=10)
+
+        dlg.wait_window()
+        if not resultado["loja"]:
+            return
+
+        num_loja = resultado["loja"]
+
+        # ── Escolher destino ──────────────────────────────────────────────────
+        data_hoje = datetime.now().strftime("%Y%m%d")
+        nome_sugerido = f"ConciliacaoPIX_Loja{num_loja}_{data_hoje}.xlsx"
+        path_out = filedialog.asksaveasfilename(
+            title="Salvar relatório",
+            defaultextension=".xlsx",
+            initialfile=nome_sugerido,
+            filetypes=[("Excel", "*.xlsx"), ("Todos", "*.*")])
+        if not path_out:
+            return
+
+        # ── Montar dados ──────────────────────────────────────────────────────
+        try:
+            import openpyxl
+            from openpyxl.styles import (Font, PatternFill, Alignment,
+                                          Border, Side)
+            from openpyxl.utils import get_column_letter
+
+            wb = openpyxl.Workbook()
+
+            # ── Aba 1: Resumo Geral ───────────────────────────────────────────
+            ws_res = wb.active
+            ws_res.title = "Resumo"
+
+            def hdr_style(cell, cor_hex="2B4590"):
+                cell.font      = Font(bold=True, color="FFFFFF", size=10)
+                cell.fill      = PatternFill("solid", fgColor=cor_hex)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+
+            def sub_hdr(cell):
+                cell.font      = Font(bold=True, size=9)
+                cell.fill      = PatternFill("solid", fgColor="D9E1F2")
+                cell.alignment = Alignment(horizontal="left")
+
+            def val_cell(cell, bold=False):
+                cell.alignment = Alignment(horizontal="right")
+                if bold:
+                    cell.font = Font(bold=True)
+
+            thin = Side(style="thin", color="CCCCCC")
+            borda = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+            now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+            # Cabeçalho do documento
+            ws_res["A1"] = f"Conciliação PIX Maquineta — Loja {num_loja}"
+            ws_res["A1"].font = Font(bold=True, size=13, color="2B4590")
+            ws_res["A2"] = f"Gerado em: {now_str}"
+            ws_res["A2"].font = Font(size=9, color="888888")
+            ws_res.merge_cells("A1:D1")
+            ws_res.merge_cells("A2:D2")
+
+            row = 4
+
+            # ── Bloco Vendas ──────────────────────────────────────────────────
+            ws_res.cell(row, 1, "VENDAS PIX MAQUINETA")
+            hdr_style(ws_res.cell(row, 1))
+            ws_res.merge_cells(f"A{row}:B{row}")
+            row += 1
+
+            if self.df_vendas is not None:
+                dv = self.df_vendas
+                cnt_v = dv["status"].value_counts()
+                soma_v = dv["valor"].sum()
+                soma_conc_v = dv.loc[dv["status"] == "conciliado", "valor"].sum()
+                soma_pend_v = dv.loc[dv["status"] == "pendente",   "valor"].sum()
+                soma_parc_v = dv.loc[dv["status"] == "parcial",    "valor"].sum()
+                soma_ign_v  = dv.loc[dv["status"] == "ignorado",   "valor"].sum()
+
+                items_v = [
+                    ("Total de registros",       len(dv),                         False),
+                    ("✅ Conciliados",            cnt_v.get("conciliado", 0),      False),
+                    ("⚠ Parciais",               cnt_v.get("parcial", 0),         False),
+                    ("❌ Pendentes",              cnt_v.get("pendente", 0),        False),
+                    ("🚫 Ignorados",              cnt_v.get("ignorado", 0),        False),
+                    ("Σ Valor Total Vendas",      f"R$ {soma_v:,.2f}",            True),
+                    ("Σ Valor Conciliado",        f"R$ {soma_conc_v:,.2f}",       False),
+                    ("Σ Valor Pendente",          f"R$ {soma_pend_v:,.2f}",       False),
+                    ("Σ Valor Parcial",           f"R$ {soma_parc_v:,.2f}",       False),
+                    ("Σ Valor Ignorado",          f"R$ {soma_ign_v:,.2f}",        False),
+                    ("% Conciliado",              f"{100*soma_conc_v/soma_v:.1f}%" if soma_v else "—", False),
+                ]
+            else:
+                items_v = [("(sem dados)", "—", False)]
+
+            for label, valor, bold in items_v:
+                c1 = ws_res.cell(row, 1, label)
+                c2 = ws_res.cell(row, 2, valor)
+                sub_hdr(c1)
+                val_cell(c2, bold)
+                c1.border = borda
+                c2.border = borda
+                row += 1
+
+            row += 1
+
+            # ── Bloco Banco ───────────────────────────────────────────────────
+            ws_res.cell(row, 1, "EXTRATO PIX MAQUINETA — BANCO")
+            hdr_style(ws_res.cell(row, 1), cor_hex="B45309")
+            ws_res.merge_cells(f"A{row}:B{row}")
+            row += 1
+
+            if self.df_banco is not None:
+                db = self.df_banco
+                cnt_b = db["status"].value_counts()
+                soma_b = db["VALOR"].sum()
+                soma_conc_b = db.loc[db["status"] == "conciliado", "VALOR"].sum()
+                soma_pend_b = db.loc[db["status"] == "pendente",   "VALOR"].sum()
+
+                items_b = [
+                    ("Total de registros",       len(db),                         False),
+                    ("✅ Conciliados",            cnt_b.get("conciliado", 0),      False),
+                    ("❌ Pendentes",              cnt_b.get("pendente", 0),        False),
+                    ("Σ Valor Total Banco",       f"R$ {soma_b:,.2f}",            True),
+                    ("Σ Valor Conciliado",        f"R$ {soma_conc_b:,.2f}",       False),
+                    ("Σ Valor Pendente",          f"R$ {soma_pend_b:,.2f}",       False),
+                    ("% Conciliado",              f"{100*soma_conc_b/soma_b:.1f}%" if soma_b else "—", False),
+                ]
+            else:
+                items_b = [("(sem dados)", "—", False)]
+
+            for label, valor, bold in items_b:
+                c1 = ws_res.cell(row, 1, label)
+                c2 = ws_res.cell(row, 2, valor)
+                sub_hdr(c1)
+                val_cell(c2, bold)
+                c1.border = borda
+                c2.border = borda
+                row += 1
+
+            row += 1
+
+            # ── Bloco Diferença ───────────────────────────────────────────────
+            if self.df_vendas is not None and self.df_banco is not None:
+                ws_res.cell(row, 1, "DIFERENÇA")
+                hdr_style(ws_res.cell(row, 1), cor_hex="1D6A3A")
+                ws_res.merge_cells(f"A{row}:B{row}")
+                row += 1
+
+                dif = soma_v - soma_b
+                cor_dif = "1D6A3A" if abs(dif) < 0.05 else "C0392B"
+                c1 = ws_res.cell(row, 1, "Δ Vendas − Banco")
+                c2 = ws_res.cell(row, 2, f"R$ {dif:,.2f}")
+                sub_hdr(c1)
+                c2.font      = Font(bold=True, color=cor_dif)
+                c2.alignment = Alignment(horizontal="right")
+                c1.border = borda
+                c2.border = borda
+
+            ws_res.column_dimensions["A"].width = 32
+            ws_res.column_dimensions["B"].width = 22
+
+            # ── Aba 2: Vendas detalhado ───────────────────────────────────────
+            if self.df_vendas is not None:
+                ws_v = wb.create_sheet("Vendas")
+                cols_v_exp = ["origem", "referencia", "valor", "saldo_rest",
+                               "descricao", "status", "par_banco"]
+                for ci, col in enumerate(cols_v_exp, 1):
+                    c = ws_v.cell(1, ci, col.upper())
+                    hdr_style(c)
+
+                for ri, (_, row_d) in enumerate(self.df_vendas.iterrows(), 2):
+                    for ci, col in enumerate(cols_v_exp, 1):
+                        v = row_d.get(col, "")
+                        ws_v.cell(ri, ci, v)
+
+                for ci, col in enumerate(cols_v_exp, 1):
+                    ws_v.column_dimensions[get_column_letter(ci)].width = (
+                        50 if col == "descricao" else 16)
+
+            # ── Aba 3: Banco detalhado ────────────────────────────────────────
+            if self.df_banco is not None:
+                ws_b = wb.create_sheet("Banco")
+                cols_b_exp = ["DT_RECEB", "HR_RECEB", "TERMINAL", "CV",
+                               "TXID", "VALOR", "saldo_rest", "status", "par_venda"]
+                for ci, col in enumerate(cols_b_exp, 1):
+                    c = ws_b.cell(1, ci, col.upper())
+                    hdr_style(c, cor_hex="B45309")
+
+                for ri, (_, row_d) in enumerate(self.df_banco.iterrows(), 2):
+                    for ci, col in enumerate(cols_b_exp, 1):
+                        v = row_d.get(col, "")
+                        ws_b.cell(ri, ci, v)
+
+                for ci, col in enumerate(cols_b_exp, 1):
+                    ws_b.column_dimensions[get_column_letter(ci)].width = (
+                        40 if col == "TXID" else 16)
+
+            # ── Aba 4: Pendentes (itens sem conciliação) ──────────────────────
+            ws_pend = wb.create_sheet("Pendentes")
+            ws_pend["A1"] = "VENDAS PENDENTES"
+            hdr_style(ws_pend["A1"])
+            ws_pend.merge_cells("A1:G1")
+            row_p = 2
+
+            if self.df_vendas is not None:
+                pend_v = self.df_vendas[self.df_vendas["status"] == "pendente"]
+                for _, row_d in pend_v.iterrows():
+                    for ci, col in enumerate(["origem","referencia","valor","saldo_rest","descricao","status","par_banco"], 1):
+                        ws_pend.cell(row_p, ci, row_d.get(col, ""))
+                    row_p += 1
+
+            row_p += 1
+            ws_pend.cell(row_p, 1, "PIX BANCO PENDENTES")
+            hdr_style(ws_pend.cell(row_p, 1), cor_hex="B45309")
+            ws_pend.merge_cells(f"A{row_p}:G{row_p}")
+            row_p += 1
+
+            if self.df_banco is not None:
+                pend_b = self.df_banco[self.df_banco["status"] == "pendente"]
+                for _, row_d in pend_b.iterrows():
+                    for ci, col in enumerate(["DT_RECEB","HR_RECEB","TERMINAL","CV","TXID","VALOR","saldo_rest"], 1):
+                        ws_pend.cell(row_p, ci, row_d.get(col, ""))
+                    row_p += 1
+
+            for ci in range(1, 8):
+                ws_pend.column_dimensions[get_column_letter(ci)].width = 18
+            ws_pend.column_dimensions["E"].width = 40
+
+            wb.save(path_out)
+            self.status_var.set(f"✅ Exportado: {os.path.basename(path_out)}")
+            messagebox.showinfo("Exportação concluída",
+                f"Relatório salvo com sucesso!\n\n{path_out}")
+
+        except Exception as e:
+            import traceback
+            messagebox.showerror("Erro na exportação",
+                f"{e}\n\n{traceback.format_exc()}")
 
     # ─── Helpers ─────────────────────────────────────────────────────────────
 

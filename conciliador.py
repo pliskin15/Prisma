@@ -45,7 +45,6 @@ def _num(val):
     except:
         return 0.0
 
-
 def _extrair_linhas_pdf(path):
     linhas = []
     with pdfplumber.open(path) as pdf:
@@ -55,7 +54,6 @@ def _extrair_linhas_pdf(path):
                 linhas.append(linha)
     return linhas
 
-
 def _ultimo_num_linha(linha):
     tokens = re.findall(r"\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2}|\d+", linha)
     for tok in reversed(tokens):
@@ -64,23 +62,13 @@ def _ultimo_num_linha(linha):
             return n
     return 0.0
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PARSER: CUPOM FISCAL (PDF) — filtra VENDA A CARTAO DEBITO / CREDITO
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Prefixos de linhas de pagamento de cartão no cupom fiscal
 _GATILHOS_CARTAO_CUPOM = [
     "VENDA A CARTAO DEBITO",
     "VENDA A CARTAO DE CREDITO",
 ]
 
 def ler_cupom_fiscal(path):
-    """
-    Lê o Relatório Cupom Fiscal (PDF).
-    Captura linhas com "VENDA A CARTAO DEBITO" ou "VENDA A CARTAO DE CREDITO".
-    Preserva contexto do cupom entre quebras de página.
-    """
+
     linhas = _extrair_linhas_pdf(path)
     registros = []
 
@@ -94,7 +82,6 @@ def ler_cupom_fiscal(path):
             continue
         up = linha_strip.upper()
 
-        # ── Linha principal do cupom ──────────────────────────────────────────
         m = re.match(r"^(\d{5,})\s+\d{5,}\s+\d+\s+\w+\s+(\S+)\s+(\S+)", linha_strip)
         if m:
             cupom_atual  = m.group(1)
@@ -102,14 +89,12 @@ def ler_cupom_fiscal(path):
             vender_atual = m.group(3)
             continue
 
-        # ── Reset apenas em linhas de totais/seção — não em cabeçalho de página
         if any(up.startswith(t) for t in ["TOTAL GERAL", "TOTAL :", "TOTAL:",
                                            "DESCRICAO", "TOTAIS", "CANCELADOS",
                                            "SERVICOS", "VENDAS"]):
             cupom_atual = None
             continue
 
-        # ── Linhas de pagamento de cartão ─────────────────────────────────────
         for gatilho in _GATILHOS_CARTAO_CUPOM:
             if up.startswith(gatilho):
                 if not cupom_atual:
@@ -127,15 +112,9 @@ def ler_cupom_fiscal(path):
                         "status":     "pendente",
                         "par_banco":  "",
                     })
-                # Não reseta cupom_atual: um cupom pode ter débito + crédito
                 break
 
     return pd.DataFrame(registros)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PARSER: NOTA FISCAL (PDF) — filtra VENDA A CARTAO DEBITO / CREDITO
-# ─────────────────────────────────────────────────────────────────────────────
 
 _GATILHOS_CARTAO_NF = [
     "VENDA A CARTAO DEBITO",
@@ -143,10 +122,7 @@ _GATILHOS_CARTAO_NF = [
 ]
 
 def ler_nota_fiscal(path):
-    """
-    Lê o Relatório de Venda Avista — Notas Fiscais (PDF).
-    Captura linhas com "VENDA A CARTAO DEBITO" ou "VENDA A CARTAO DE CREDITO".
-    """
+
     linhas = _extrair_linhas_pdf(path)
     registros = []
 
@@ -160,7 +136,6 @@ def ler_nota_fiscal(path):
             continue
         up = linha_strip.upper()
 
-        # ── Linha principal da nota ───────────────────────────────────────────
         m = re.match(r"^(\d{5,})\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s{2,}(\S+)\s+([\d\.,]+)", linha_strip)
         if m:
             nota_atual    = m.group(1)
@@ -168,8 +143,6 @@ def ler_nota_fiscal(path):
             cond_atual    = m.group(7).strip()
             continue
 
-        # Fallback: linha que começa com número de nota
-        # Exige 4+ campos numéricos iniciais para não capturar linhas CODPOS
         if re.match(r"^\d{5,}\s", linha_strip):
             partes = linha_strip.split()
             nums_ini = sum(1 for p in partes[:6] if re.match(r"^\d+$", p))
@@ -180,7 +153,6 @@ def ler_nota_fiscal(path):
                 cond_atual    = ""
             continue
 
-        # ── Linhas de pagamento de cartão ─────────────────────────────────────
         for gatilho in _GATILHOS_CARTAO_NF:
             if up.startswith(gatilho):
                 if not nota_atual:
@@ -202,21 +174,8 @@ def ler_nota_fiscal(path):
 
     return pd.DataFrame(registros)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PARSER: RECIBOS (PDF) — filtra CART. DEB e CART. CRED via colunas DPP
-# ─────────────────────────────────────────────────────────────────────────────
-
 def ler_recibos(path):
-    """
-    Lê o Relatório de Recibos (PDF).
-    Captura recibos que tenham valor em CART.DEB (col 10) ou CART.CRED (col 11).
 
-    Colunas DPP (números com vírgula, na ordem):
-      [0]RECEBIDO [1]V.DOC [2]JR.DOC [3]JR.CART [4]DESPESAS
-      [5]DINH. [6]CHEQUE [7]CART.DEB [8]CART.CRED [9]DEPOSITO
-      [10]ANTECIPADO [11]DEVCAR
-    """
     linhas = _extrair_linhas_pdf(path)
     registros    = []
     recibo_atual = None
@@ -225,22 +184,18 @@ def ler_recibos(path):
         linha_limpa = linha.strip()
         up = linha_limpa.upper()
 
-        # ── Detecta início de recibo ──────────────────────────────────────────
         m_recibo = re.match(r"^(\d+)\s+(\d+)\s+", linha_limpa)
         tem_texto_apos = bool(re.search(r"[A-Za-z]", linha_limpa.split(None, 2)[-1])) \
                         if m_recibo else False
         if m_recibo and tem_texto_apos:
-            # salva anterior se tiver valor de cartão
             if recibo_atual and recibo_atual["valor"] > 0:
                 registros.append(recibo_atual)
-            recibo_atual = None   # reseta SEMPRE antes de decidir
+            recibo_atual = None
 
-            # Só processa se houver cartão na linha de cabeçalho
-            # Recibos com apenas DEP. PIX são ignorados neste conciliador
             tem_cartao = ("CART. CRD" in up or "CART.CRD" in up or
                           "CART. DEB" in up or "CART.DEB" in up)
             if not tem_cartao:
-                continue          # recibo_atual permanece None → DPPs ignoradas
+                continue
 
             partes = linha_limpa.split()
             numero_recibo = partes[1] if len(partes) > 1 else "?"
@@ -263,18 +218,11 @@ def ler_recibos(path):
             }
             continue
 
-        # ── Linhas DPP: soma CART.DEB (idx 7) + CART.CRED (idx 8) ───────────
-        # recibo_atual é None para recibos PIX → linhas DPP ignoradas
-        if recibo_atual and up.startswith("DPP"):
+        if recibo_atual and (up.startswith("DPP") or up.startswith("ANT")):
             partes_dpp = linha_limpa.split()
-            # DPP válida tem número de documento longo como 2º campo
-            # A linha de resumo "DPP 625,98 ..." não tem isso
             if len(partes_dpp) < 3 or not re.match(r"^\d{8,}$", partes_dpp[1]):
                 continue
             nums = re.findall(r"\d{1,3}(?:\.\d{3})*,\d{2}", linha_limpa)
-            # Mapeamento confirmado pelo layout real do PDF:
-            # [0]RECEBIDO [1]V.DOC [2]JR.DOC [3]JR.CART [4]DESPESAS
-            # [5]DINH. [6]CHEQUE [7]CART.DEB [8]CART.CRED [9]DEPOSITO ...
             IDX_JR_CART   = 3
             IDX_CART_DEB  = 7
             IDX_CART_CRED = 8
@@ -283,7 +231,6 @@ def ler_recibos(path):
             cart_cred = _num(nums[IDX_CART_CRED]) if len(nums) > IDX_CART_CRED else 0.0
             recibo_atual["valor"] = round(recibo_atual["valor"] + jr_cart + cart_deb + cart_cred, 2)
 
-    # Adiciona último recibo
     if recibo_atual and recibo_atual["valor"] > 0:
         registros.append(recibo_atual)
 
@@ -292,32 +239,14 @@ def ler_recibos(path):
         df["saldo_rest"] = df["valor"]
     return df
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PARSER: EXTRATO CARTÕES (XLSX — Getnet/Santander, aba ANALITICO)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def ler_mov_cartao(path):
-    """
-    Lê o extrato de cartões em formato XLSX (Getnet/Santander, aba ANALITICO).
 
-    Colunas relevantes:
-      Cartões | Data/Hora da Venda | Número da Autorização
-      Número do Comprovante de Vendas | Número do Terminal
-      Descrição do Lançamento | Total de Parcelas | Valor Bruto
-
-    Regras:
-    - Cabeçalho está na linha de índice 7
-    - Captura linhas com "DEBITO" ou "CREDITO" / "PARCELADO" na descrição
-    - Valor Bruto já é numérico no xlsx
-    """
     try:
         df_raw = pd.read_excel(path, sheet_name="ANALITICO", header=7,
                                engine="openpyxl")
     except Exception:
         df_raw = pd.read_excel(path, header=7, engine="openpyxl")
 
-    # Normalizar colunas (remove \n e espaços extras)
     df_raw.columns = [str(c).replace("\n", " ").strip() for c in df_raw.columns]
 
     col_desc  = "Descrição do Lançamento"
@@ -329,14 +258,47 @@ def ler_mov_cartao(path):
     col_parc  = "Total de Parcelas"
     col_cartao= "Cartões"
 
-    # Filtrar: apenas linhas com descrição de cartão (débito/crédito/parcelado)
     df_raw = df_raw[df_raw[col_desc].notna()].copy()
     mask = df_raw[col_desc].str.upper().str.contains(
         r"DEBITO|CREDITO|PARCELADO", na=False)
     df_raw = df_raw[mask].copy()
 
-    # Valor positivo
     df_raw[col_valor] = pd.to_numeric(df_raw[col_valor], errors="coerce")
+
+    cancelamentos = df_raw[df_raw[col_valor] < 0].copy()
+    if not cancelamentos.empty:
+        cancel_por_autho = (
+            cancelamentos.groupby(col_autho)[col_valor]
+            .sum()
+            .abs()
+            .to_dict()
+        )
+        idx_cancelamentos = set(cancelamentos.index.tolist())
+
+        idx_anulados = set()
+        for autho, valor_cancel in cancel_por_autho.items():
+            autho_str = str(autho).strip()
+            positivos = df_raw[
+                (df_raw[col_valor] > 0) &
+                (df_raw[col_autho].astype(str).str.strip() == autho_str)
+            ].copy()
+            if positivos.empty:
+                continue
+            restante = round(valor_cancel, 2)
+            for idx_pos in positivos.index:
+                if restante <= 0:
+                    break
+                val_pos = round(float(df_raw.at[idx_pos, col_valor]), 2)
+                if restante >= val_pos:
+                    idx_anulados.add(idx_pos)
+                    restante = round(restante - val_pos, 2)
+                else:
+                    df_raw.at[idx_pos, col_valor] = round(val_pos - restante, 2)
+                    restante = 0.0
+
+        idx_remover = idx_cancelamentos | idx_anulados
+        df_raw = df_raw[~df_raw.index.isin(idx_remover)].copy()
+
     df_raw = df_raw[df_raw[col_valor] > 0].copy()
     df_raw[col_valor] = df_raw[col_valor].round(2)
 
@@ -393,11 +355,6 @@ def ler_mov_cartao(path):
         df["saldo_rest"] = df["VALOR"]
 
     return df
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CONCILIAÇÃO AUTOMÁTICA
-# ─────────────────────────────────────────────────────────────────────────────
 
 def conciliar_automatico(df_vendas, df_banco, tolerancia=0.01):
     dv = df_vendas.copy()
@@ -873,8 +830,6 @@ class ConciliacaoApp(tk.Toplevel):
         acao = "desconciliados" if novo_status is None else "ignorados"
         self.status_var.set(f"✔ Registros {acao}.")
 
-    # ─── Cliques ─────────────────────────────────────────────────────────────
-
     def _on_click_venda(self, event):
         item = self.tree_v.identify_row(event.y)
         if not item:
@@ -942,8 +897,6 @@ class ConciliacaoApp(tk.Toplevel):
         self.sel_bancos = []
         self.lbl_sel_v.config(text="Venda: (nenhuma)")
         self.lbl_sel_b.config(text="Banco: (nenhum)")
-
-    # ─── Tabelas ──────────────────────────────────────────────────────────────
 
     def atualizar_tabelas(self):
         self._popular_tree_vendas()
@@ -1044,8 +997,6 @@ class ConciliacaoApp(tk.Toplevel):
                 cor    = COR_VERDE if abs(dif) < 0.05 else COR_VERMELHO
                 self.lbl_res["diferenca"].config(
                     text=f"R$ {dif:,.2f}", fg=cor)
-
-    # ─── Helpers ─────────────────────────────────────────────────────────────
 
     def _item_id(self, tree, item):
         if tree == self.tree_v:
