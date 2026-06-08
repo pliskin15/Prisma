@@ -1,15 +1,15 @@
 {
-  "version": "4.0.7.1",
-  "generated_at": "2026-05-27T13:10:00.131736Z",
+  "version": "4.0.7.2y",
+  "generated_at": "2026-06-08T19:44:53.298246Z",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/files",
   "files": {
     "Prisma.exe": {
-      "size": 24136124,
-      "sha256": "649099c10baab107891ebaf99e21fd39d7dcbfd22a5045052caf7daf93abdfdb"
+      "size": 27930317,
+      "sha256": "6384ca6c4378a143dc7aa4935132139151789f63f68c28f9855ed2d81a2efed4"
     },
     "_internal/base_library.zip": {
       "size": 1402481,
-      "sha256": "b5b85a62a17901252df589fb9602274ae07cf925a0a53e1185a3ff2287772cdd"
+      "sha256": "31c1e81e404c92632e41bddf822d0535a425cfeeff53c0bf8ba4a80c3ca719f9"
     },
     "_internal/libcrypto-3.dll": {
       "size": 5231984,
@@ -163,6 +163,18 @@
       "size": 1484144,
       "sha256": "1d332841edbea63631e3a4ee6e9f69de55e8e61efd5a837c30218794b85ff0da"
     },
+    "_internal/asyncpg/pgproto/pgproto.cp313-win_amd64.pyd": {
+      "size": 249856,
+      "sha256": "104471b4d2ed7a1bb2b44c79a58c740ababd77334d36897ba09771bbd3a2b96b"
+    },
+    "_internal/asyncpg/protocol/protocol.cp313-win_amd64.pyd": {
+      "size": 699392,
+      "sha256": "1aba455670d76748bc16b60341f23070d24e8011427d8f4b2f991efbb033a6cd"
+    },
+    "_internal/asyncpg/protocol/record.cp313-win_amd64.pyd": {
+      "size": 28160,
+      "sha256": "c250ed0b52f312d65fa9df35cfc6c70eeb9c99e24dc20c4d767cef8ec517c4fc"
+    },
     "_internal/bcrypt/_bcrypt.pyd": {
       "size": 305152,
       "sha256": "898d1fe05e287d66bd379f26eb49d27a260f14666c7dc8b1719dae8c489abff0"
@@ -242,6 +254,38 @@
     "_internal/dateutil/zoneinfo/dateutil-zoneinfo.tar.gz": {
       "size": 156400,
       "sha256": "d3ea52e7b6e968de0d884df1288193596fa95b803db4f92a18279a7398004475"
+    },
+    "_internal/email_validator-2.3.0.dist-info/entry_points.txt": {
+      "size": 66,
+      "sha256": "cd133fe9b3485121d36cdc79bba3379cad4c020bafaf2adcf612020ba1f2ac18"
+    },
+    "_internal/email_validator-2.3.0.dist-info/INSTALLER": {
+      "size": 4,
+      "sha256": "ceebae7b8927a3227e5303cf5e0f1f7b34bb542ad7250ac03fbcde36ec2f1508"
+    },
+    "_internal/email_validator-2.3.0.dist-info/METADATA": {
+      "size": 26006,
+      "sha256": "2a97b81eefcd856bc80b0346f47fa2d800b9a438bf8f9231ae00fe931d5c9fbc"
+    },
+    "_internal/email_validator-2.3.0.dist-info/RECORD": {
+      "size": 2103,
+      "sha256": "c7dd9d89c5f0055f72f94652f3b1d2c982606d9eeaee0be3e851ebf62e01b3f7"
+    },
+    "_internal/email_validator-2.3.0.dist-info/top_level.txt": {
+      "size": 16,
+      "sha256": "7d80ce49615991ee3abaded6a9d3802638e19693d801a3b03b022c877b3ca162"
+    },
+    "_internal/email_validator-2.3.0.dist-info/WHEEL": {
+      "size": 91,
+      "sha256": "ff309ddcdd65ebd02bc724dbf2bcc4a0ff53a5b61792a44548d383e4ebb19d3b"
+    },
+    "_internal/email_validator-2.3.0.dist-info/licenses/LICENSE": {
+      "size": 1212,
+      "sha256": "672179752e109134a3fb2bdd0780b29fdb7a03974f0f586a13aead5129562d4c"
+    },
+    "_internal/greenlet/_greenlet.cp313-win_amd64.pyd": {
+      "size": 72704,
+      "sha256": "95f31431898a6432e1c1855840c59923ef82eb1bbddce1c52a89960b0c438438"
     },
     "_internal/h2-4.3.0.dist-info/INSTALLER": {
       "size": 4,
@@ -2091,29 +2135,25 @@
       "size": 62464,
       "sha256": "4a781c4485b8fce38eea67f695079882786c0e18dbff37fd2b6fb986db05a1d6"
     },
-    "_internal/pydantic-2.12.5.dist-info/INSTALLER": {
-      "size": 4,
-      "sha256": "ceebae7b8927a3227e5303cf5e0f1f7b34bb542ad7250ac03fbcde36ec2f1508"
+    "_internal/psycopg2/_psycopg.cp313-win_amd64.pyd": {
+      "size": 235520,
+      "sha256": "30582eeb9d735a69db4951d59b759810024d43d33bcfb3883c770b7b7473e841"
     },
-    "_internal/pydantic-2.12.5.dist-info/METADATA": {
-      "size": 90587,
-      "sha256": "a3ba23e895191fed69b8323cbcbcdc82984ca0b6a3cdc62c48a2341886a9c08d"
+    "_internal/psycopg2_binary.libs/libcrypto-3-x64-a8c62806cccbc4a22cef346d1ae1b324.dll": {
+      "size": 5331968,
+      "sha256": "a8c62806cccbc4a22cef346d1ae1b32484c7285fc951a153a76f877ec5019966"
     },
-    "_internal/pydantic-2.12.5.dist-info/RECORD": {
-      "size": 15455,
-      "sha256": "49466972b617c2510cf88d76f53bf59b6fd4e086acae5a9aeee9d57d84fe958d"
+    "_internal/psycopg2_binary.libs/libpq-2c01e3753ccf0ab29f038d1bd2d7989e.dll": {
+      "size": 334336,
+      "sha256": "ba45a5e84eb9fb0a5115b97348d13b8f46c6222f94c2c5a2132cd273b7db2236"
     },
-    "_internal/pydantic-2.12.5.dist-info/WHEEL": {
-      "size": 87,
-      "sha256": "aad0b0a12256807936d52d4a6f88a1773236ae527564a688bab4e3fe780e8724"
-    },
-    "_internal/pydantic-2.12.5.dist-info/licenses/LICENSE": {
-      "size": 1129,
-      "sha256": "a9e186f3ca16b5eef84318e7a701721351a00cb7b8ae3a4394b67b49e3529ef3"
+    "_internal/psycopg2_binary.libs/libssl-3-x64-ff5ae557d601c07531017fe042fe59c6.dll": {
+      "size": 871936,
+      "sha256": "996e555f6b4af3f08855398b64545bc83e308ea4f295d8a817d7e1843934ebc1"
     },
     "_internal/pydantic_core/_pydantic_core.cp313-win_amd64.pyd": {
-      "size": 5437440,
-      "sha256": "77077f8f3b7dfbd9f6d4386f5ce424f72085e5fbfcd1593759fcfa1849f586e4"
+      "size": 5064704,
+      "sha256": "3487f1a4f2f018b34c07995a5af2db1febc7b2c804126b3cc1f94134d5a2b163"
     },
     "_internal/pypdfium2_raw/pdfium.dll": {
       "size": 5778432,
@@ -2463,6 +2503,10 @@
       "size": 1051648,
       "sha256": "8a9f51b9a5152ef0b0fe3c5017af1f7004036311bdb806eb7987305ce9f1651f"
     },
+    "_internal/python_calamine/_python_calamine.cp313-win_amd64.pyd": {
+      "size": 1611264,
+      "sha256": "1f706679812f351f193ed7f59bc9ca003a37eaa959c3beeb0ad382846ded2d85"
+    },
     "_internal/pywin32_system32/pythoncom313.dll": {
       "size": 690176,
       "sha256": "e312c8edb2d43a014daddfa984a805e6b5f933c60777e7b527332e682d9b1813"
@@ -2502,6 +2546,26 @@
     "_internal/setuptools/_vendor/jaraco/text/Lorem ipsum.txt": {
       "size": 1335,
       "sha256": "37fedcffbf73c4eb9f058f47677cb33203a436ff9390e4d38a8e01c9dad28e0b"
+    },
+    "_internal/sqlalchemy/cyextension/collections.cp313-win_amd64.pyd": {
+      "size": 176128,
+      "sha256": "9bfb2730660c78f9ce5482694cae04225c3843388f78a2d711d8cdab22dcbafd"
+    },
+    "_internal/sqlalchemy/cyextension/immutabledict.cp313-win_amd64.pyd": {
+      "size": 69632,
+      "sha256": "0e923dc56dbd20ec90c23a7ccccca9860b704b3575e06bc7ea20eca52fc60eb4"
+    },
+    "_internal/sqlalchemy/cyextension/processors.cp313-win_amd64.pyd": {
+      "size": 57856,
+      "sha256": "37326cc1e0c942cf1341d728131cb2776b043e40690bffbdc15d5029a14e6880"
+    },
+    "_internal/sqlalchemy/cyextension/resultproxy.cp313-win_amd64.pyd": {
+      "size": 60928,
+      "sha256": "5a4a71adbcf7e7d408a4b20b43b1240de33ba340a20592753ef41488daf010b8"
+    },
+    "_internal/sqlalchemy/cyextension/util.cp313-win_amd64.pyd": {
+      "size": 72192,
+      "sha256": "b14fdb1d4f012d0373fa9c2f0a42fe14d93797c6e478c8295e197e29a77d9c11"
     },
     "_internal/tcl8/8.4/platform-1.0.19.tm": {
       "size": 11708,
