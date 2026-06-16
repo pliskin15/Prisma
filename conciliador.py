@@ -187,7 +187,12 @@ def ler_recibos(path):
         m_recibo = re.match(r"^(\d+)\s+(\d+)\s+", linha_limpa)
         tem_texto_apos = bool(re.search(r"[A-Za-z]", linha_limpa.split(None, 2)[-1])) \
                         if m_recibo else False
-        if m_recibo and tem_texto_apos:
+        # Cabecalho de recibo SEMPRE traz "TOTAL :" na mesma linha. Sem essa
+        # exigencia, uma linha de continuacao CODPOS/AUTORIZACAO/DOCUMENTO cujo
+        # campo DOCUMENTO contenha letra (ex.: "3D") era confundida com um novo
+        # cabecalho, descartando o recibo em andamento (valor ainda 0,00) e
+        # ignorando a linha DPP seguinte com o valor real.
+        if m_recibo and tem_texto_apos and "TOTAL" in up:
             if recibo_atual and recibo_atual["valor"] > 0:
                 registros.append(recibo_atual)
             recibo_atual = None
