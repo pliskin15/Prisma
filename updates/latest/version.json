@@ -1,67 +1,67 @@
 {
-  "version": "4.0.7.34",
-  "generated_at": "2026-06-08T19:49:08.979705Z",
+  "version": "4.0.7.35",
+  "generated_at": "2026-06-16T14:41:44.235377Z",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/files",
   "files": {
     "Prisma.exe": {
-      "size": 27930317,
-      "sha256": "6384ca6c4378a143dc7aa4935132139151789f63f68c28f9855ed2d81a2efed4"
+      "size": 27937789,
+      "sha256": "5fa36a67ce54368f9a957e2f752df4dcd070bf6b743d3e2d61fc7fef1a8cafef"
     },
     "_internal/base_library.zip": {
-      "size": 1402481,
-      "sha256": "31c1e81e404c92632e41bddf822d0535a425cfeeff53c0bf8ba4a80c3ca719f9"
+      "size": 1409329,
+      "sha256": "6b282bc7b6b4b1f97f6a9b125fc9da7df2fdaa17b208529af5b7bb781fc1fb05"
     },
     "_internal/libcrypto-3.dll": {
-      "size": 5231984,
-      "sha256": "eaf6d613b95b61a39558d84c50e72630a66c99914292df88e7b54ebd60c5bd34"
+      "size": 5238520,
+      "sha256": "09499e186cf0e434ffa17ad153aa9a66d6048c54a2c03b823e2a06c49d9affe4"
     },
     "_internal/libffi-8.dll": {
       "size": 39696,
       "sha256": "eff52743773eb550fcc6ce3efc37c85724502233b6b002a35496d828bd7b280a"
     },
     "_internal/libssl-3.dll": {
-      "size": 794992,
-      "sha256": "cf1a5fdcefa3daf69041f31f98ece1d7911ca4fcb8e9f1043b4d0f459ae4c936"
+      "size": 794872,
+      "sha256": "28c395290279fa4f4f54a57b85cd66d853895f925fefb8f6fdebc0d8b1cdd07c"
     },
     "_internal/mmh3.cp313-win_amd64.pyd": {
       "size": 51200,
       "sha256": "c5f1191969453766012bf0a8c9a876d6cf6ff6a361c257fda7ce3a9d80cfb0fd"
     },
     "_internal/pyexpat.pyd": {
-      "size": 217944,
-      "sha256": "b5f57327418750229656c30a809308669797cf30d7da3705f8cd584c2b8a038b"
+      "size": 221920,
+      "sha256": "1037b8bfb0cd313119b09b4ee76ff85dffa49ba9a334f36013b8b871ad29d0e8"
     },
     "_internal/pyroaring.cp313-win_amd64.pyd": {
       "size": 631808,
       "sha256": "1c743c699b27d9b131adb098ab6b4589e987d6d7031d6f1c64f8394f431e72fb"
     },
     "_internal/python3.dll": {
-      "size": 72536,
-      "sha256": "cbc4876275178244905ee45a9ee6ec9fa4bfb9aad6209a03b756d38a186f80d1"
+      "size": 72416,
+      "sha256": "16f109e8411bc08341497c87704b7cf0d22a2678f1e3a7dca416ea7bff995469"
     },
     "_internal/python313.dll": {
-      "size": 6129496,
-      "sha256": "6964e590037c41d631fd1215f05af154f7fa68105993c6f573a20689b473f1ac"
+      "size": 6132448,
+      "sha256": "3a7a6170ea840bf2a2a76d05b687b946fcdc8d0cfedfe159012b38f1e8959a7c"
     },
     "_internal/select.pyd": {
-      "size": 33112,
-      "sha256": "ddf1221851814943a82ed8a986d228463404da2ada969661bdd69223f14fc050"
+      "size": 32992,
+      "sha256": "a208997eb871b5c7785eb9bcc6a22ba8c43262255b59a3394fbe9912f38b4692"
     },
     "_internal/sqlite3.dll": {
-      "size": 1584984,
-      "sha256": "aaae3fe73a4dda249da1ed740c087d1548a1ff7b73eaa7aa62c2354a581ee299"
+      "size": 1584864,
+      "sha256": "4b37aa9be1f66e27096da257d46fa680b74e47179f5d2137af82aeca9466d2ef"
     },
     "_internal/tcl86t.dll": {
-      "size": 1842008,
-      "sha256": "35f4075a996b17f564aaf26e9cefd02484f2b375c3cc8d8a5c042d272c4c73b3"
+      "size": 1841888,
+      "sha256": "c2785dca49e07573356f036ab4bca054b306165d827a97c67fb0db4ed93c9c79"
     },
     "_internal/tk86t.dll": {
-      "size": 1591640,
-      "sha256": "f48704666b2cad5c38144c59deaac85d5cf8d646950a411275ae92aad0741ead"
+      "size": 1591520,
+      "sha256": "a89247c1a578935a3fab088a98611d3bd4204af9dcbabcb33706af698a962bca"
     },
     "_internal/unicodedata.pyd": {
-      "size": 712536,
-      "sha256": "b965a80346ee95dbec0b147faab329f3276ba24fceb8df5df171367649f116f3"
+      "size": 712928,
+      "sha256": "7f8d28574732959cdb1188127fe3494c3618b602eede69c0a71846f0b5cc8a15"
     },
     "_internal/VCRUNTIME140.dll": {
       "size": 120400,
@@ -72,84 +72,84 @@
       "sha256": "6a99bc0128e0c7d6cbbf615fcc26909565e17d4ca3451b97f8987f9c6acbc6c8"
     },
     "_internal/zlib1.dll": {
-      "size": 148312,
-      "sha256": "4a45bb65e9f2c331cd9bd5d9a9b4c8e107483e153eed1e942b2a8596f572554f"
+      "size": 148192,
+      "sha256": "bfb680c8f3eca7c150661be65c7e3bd16965aa5056be0b4f22992a1388c73504"
     },
     "_internal/_asyncio.pyd": {
-      "size": 73048,
-      "sha256": "423007b8c7d63b4cb5f23665a761dd5de1c7e15a65c8013391de0d18c89ce417"
+      "size": 72928,
+      "sha256": "2d13fa4b5ef94464bb94e2ec613eceb5bbad70c8e7e05f0e8ef25f6078397cdc"
     },
     "_internal/_brotli.cp313-win_amd64.pyd": {
       "size": 856576,
       "sha256": "a7f83086a999a01db0ca8cba6d476b4aa74ec2f96292cf4e17446dd30c085c61"
     },
     "_internal/_bz2.pyd": {
-      "size": 86872,
-      "sha256": "1bf985b54f529a3cbb3e52532791cc4d4c64009142d37b54eb3521adec203d5c"
+      "size": 86752,
+      "sha256": "76a33e2baa3880aa46290cc7d5810b3155c5e2f5a1cc7d3f7b751f6434144ada"
     },
     "_internal/_cffi_backend.cp313-win_amd64.pyd": {
       "size": 180224,
       "sha256": "d5b09da2e726b4e90cf0edad5d2a0ec52f369dfd060e14d3807a32b2205031fa"
     },
     "_internal/_ctypes.pyd": {
-      "size": 134488,
-      "sha256": "96b07339d52c74f2a1dd043df5eb931e4072eed90a3a8715ffec751d818e4117"
+      "size": 134368,
+      "sha256": "75687620596877b0dde462e74ae12140d695b3c78df3c6c099d55717768dde42"
     },
     "_internal/_decimal.pyd": {
-      "size": 287064,
-      "sha256": "398117a6af493e34f56ec0d78ced9901b20b8e895686ce5966edeadb23507056"
+      "size": 286432,
+      "sha256": "906964c01d04b360c316a2bb86d03d9ca9864e039baa01fa866815e6dce4a9b1"
     },
     "_internal/_elementtree.pyd": {
-      "size": 136536,
-      "sha256": "fbce9a1190a228c59767bde785c27cc4d18ee3a1f6b46e9da042fc86f8d0def7"
+      "size": 135904,
+      "sha256": "98474a51706eaff41ec303e0ae3b91605fbf9112daad837007793e53f482f1c9"
     },
     "_internal/_hashlib.pyd": {
-      "size": 69464,
-      "sha256": "50f3ce7a2281fd32f378f3ba5067bdd13e18ee95877db5199c6a0babdc9c516a"
+      "size": 69344,
+      "sha256": "5eb4a2aa9e28b49cb2a4f6ecee21f3c2b629b43a0709bad1d7e6204bac74eac2"
     },
     "_internal/_lzma.pyd": {
-      "size": 159576,
-      "sha256": "51815b6474d4216c6a2aeaffdae5d2ff4acb7a0236254f2cfe43247022f3d781"
+      "size": 159456,
+      "sha256": "f221ed5f1c2789aa357f3c2dc4cd22af134b4b91acb3fb78f9fa5f7f9a7b62e4"
     },
     "_internal/_multiprocessing.pyd": {
-      "size": 38232,
-      "sha256": "4df0d8f9da454831e96389c145ac9ea0093e09749627a3717ff60d21218670c8"
+      "size": 38112,
+      "sha256": "c04d2822d62f675df86d748ee552918e6ef2de5659ad2ce91dda5e10ecf35fc7"
     },
     "_internal/_overlapped.pyd": {
-      "size": 57688,
-      "sha256": "53fe68819f23fea7f6deb0054623e936cc2500241061f29bd5288cf4a511278f"
+      "size": 57568,
+      "sha256": "579438a55311bf39b32145b8dec7846bd6830dfa461345236a37cc0c833a4a51"
     },
     "_internal/_queue.pyd": {
-      "size": 35160,
-      "sha256": "b5b5368026c33ade7651fb4cf4c6c1ca7eecc9c8cdad0af007da8a3ac0e067f7"
+      "size": 35552,
+      "sha256": "6d77d15d668cb5ddff53cff1479dffc97db5858451d4b98f6e60a23cfb529e01"
     },
     "_internal/_socket.pyd": {
-      "size": 86872,
-      "sha256": "8676f3cebd9d01c7ad51a29b3f7ff429c0a8f6bc564cab21eb6cdaa2e26fd259"
+      "size": 86752,
+      "sha256": "ba944001aa6b53350f8c64e93643742abf1a08dd07c7dbbc13996e7d4d8a9efa"
     },
     "_internal/_sqlite3.pyd": {
-      "size": 130904,
-      "sha256": "bb80e54f2de8aa3cddc00a2a2f893c432d45ecd64a5c55758a4eb6d2e3007127"
+      "size": 131296,
+      "sha256": "ff76e7c20008fa59e8cd9c6bb8ec47f689a2cc2dc0c9b8ad9e19572b37b9d7db"
     },
     "_internal/_ssl.pyd": {
-      "size": 182104,
-      "sha256": "b8118580b461801df12ec12d3d666aa0ebc2b3750bcf92b90b92789b152bf856"
+      "size": 181984,
+      "sha256": "1cf939510359f5aa3c5f51a0ad994d9b819f5603dd100872cd30a1e25cd83f05"
     },
     "_internal/_tkinter.pyd": {
-      "size": 69976,
-      "sha256": "0a24e5f2e8ba3b774a335385c4036791b56c1c217f4371385517a92bbaac3d0e"
+      "size": 69856,
+      "sha256": "fc9d4feb5f7e802f57cdf139c06b230c1a1aff28809bbcdb2e6da3adaba7d0ca"
     },
     "_internal/_uuid.pyd": {
-      "size": 27992,
-      "sha256": "0116497261edadfe42ba7daf367c8a9ea27a1db210c8384943c890f532e3ce72"
+      "size": 27872,
+      "sha256": "e196b2a878b8a57976e9ab5d7610e35a85e2fe3043fd3952934a54b415bd2854"
     },
     "_internal/_wmi.pyd": {
-      "size": 39768,
-      "sha256": "9a7255064ea143895b28efea6d78e9e518bac290900aec52a6a0435c36a172fb"
+      "size": 39648,
+      "sha256": "ca38a50c27413a5acfd14b30b0433fcf80a64ad0020e41aceeb3666f8439aba4"
     },
     "_internal/_zoneinfo.pyd": {
-      "size": 51032,
-      "sha256": "6351ce1ff38815e152bb8f28b884e7b2a3945cbee1b1fefa6117e45953d5751f"
+      "size": 50912,
+      "sha256": "ce3d9885aa50aed7e21a5ef90393d2bcad0f155999419fe9397a190180e39a0f"
     },
     "_internal/assets/icone.ico": {
       "size": 4286,
