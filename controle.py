@@ -636,6 +636,51 @@ def abrir_analise_de_lojas(master):
     reg_var = tk.StringVar(value="")
     ttk.Combobox(top_ctrl, textvariable=reg_var, values=["","AM","AP","MA","MT","PA","RR"], width=6).pack(side="left", padx=6)
 
+    # Guarda a última tabela renderizada (já filtrada/ordenada) para exportação
+    _lojas_export_state = {"df": None}
+
+    def _exportar_lojas_xlsx():
+        df_exp = _lojas_export_state.get("df")
+        if df_exp is None or df_exp.empty:
+            messagebox.showinfo("Exportar XLSX", "Não há dados para exportar.")
+            return
+
+        sufixo_reg = f"_{reg_var.get().strip()}" if reg_var.get().strip() else ""
+        nome_sugerido = f"analise_lojas{sufixo_reg}.xlsx"
+
+        caminho = filedialog.asksaveasfilename(
+            title="Exportar tabela de Lojas",
+            defaultextension=".xlsx",
+            initialfile=nome_sugerido,
+            filetypes=[("Arquivo Excel", "*.xlsx")],
+        )
+        if not caminho:
+            return
+
+        try:
+            df_fmt = df_exp.copy()
+            if "% Finalizados" in df_fmt.columns:
+                df_fmt["% Finalizados"] = pd.to_numeric(df_fmt["% Finalizados"], errors="coerce").round(1)
+
+            with pd.ExcelWriter(caminho, engine="openpyxl") as writer:
+                df_fmt.to_excel(writer, index=False, sheet_name="Lojas")
+
+                ws = writer.sheets["Lojas"]
+                # Largura automática simples por coluna
+                for j, col in enumerate(df_fmt.columns, start=1):
+                    maior = max([len(str(col))] + [len(str(v)) for v in df_fmt[col].tolist()])
+                    ws.column_dimensions[ws.cell(row=1, column=j).column_letter].width = min(40, maior + 2)
+
+            messagebox.showinfo("Exportar XLSX", f"Tabela exportada com sucesso:\n{caminho}")
+        except Exception as e:
+            messagebox.showerror("Exportar XLSX", f"Falha ao exportar:\n{e}")
+
+    tk.Button(
+        top_ctrl, text="📊 Exportar XLSX", command=_exportar_lojas_xlsx,
+        bg="#2e7d32", fg="#ffffff", relief="flat", padx=10, pady=3,
+        activebackground="#388e3c", activeforeground="#ffffff"
+    ).pack(side="left", padx=(16, 0))
+
     lojas_tbl = tk.Frame(tab_lojas, bg="#1e1e1e")
     lojas_tbl.pack(fill="both", expand=True, padx=10, pady=6)
 
@@ -1127,6 +1172,9 @@ def abrir_analise_de_lojas(master):
                     ascending=[False,            False,           False,            False],
                     kind="mergesort"  # estável; preserva empates
                 )
+
+            # Guarda cópia para exportação em XLSX (botão "Exportar XLSX")
+            _lojas_export_state["df"] = df_view.copy()
 
             # --- Render das linhas
             body = tk.Frame(table_frame, bg="#1e1e1e"); body.pack(fill="both", expand=True)
@@ -6627,12 +6675,3 @@ class ControleLojas(tk.Frame):
             cor_reg = "#ff0000" if media_regional < 2.5 else "#ffcc00" if media_regional < 3.5 else "#1ca61c"
             tk.Label(coluna, text=f"{reg}: Média {media_regional:.2f}",
                     bg=BG_DARK, fg=cor_reg).pack(anchor="w", padx=20)
-   
-
-
-
-
-
-
-        
-

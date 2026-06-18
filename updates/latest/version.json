@@ -1,15 +1,15 @@
 {
-  "version": "4.0.7.37",
-  "generated_at": "2026-06-16T14:50:55.667363Z",
+  "version": "4.0.7.38",
+  "generated_at": "2026-06-18T13:00:22.108584Z",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/files",
   "files": {
     "Prisma.exe": {
-      "size": 27937789,
-      "sha256": "5fa36a67ce54368f9a957e2f752df4dcd070bf6b743d3e2d61fc7fef1a8cafef"
+      "size": 27945991,
+      "sha256": "fadb38e526e1325b8c826edfd2a477c87f156182a1f7b1648b98edbee3ef2705"
     },
     "_internal/base_library.zip": {
       "size": 1409329,
-      "sha256": "4ecf3852684545acc8b52a184d3578168f8aaf3f906b52da60298a5ee8264f8e"
+      "sha256": "5ad07c7b5e99d8a97561dd9706db253758aee56cbb17c2033d7192757c971699"
     },
     "_internal/libcrypto-3.dll": {
       "size": 5238520,

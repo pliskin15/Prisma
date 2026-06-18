@@ -10,23 +10,30 @@ import pandas as pd
 import pdfplumber
 import os, re
 from datetime import datetime
+from theme import T, aplicar_estilos_ttk, aplicar_tags_tree, botao_tema, registrar_callback
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CORES
+# CORES — obtidas dinamicamente via T() do theme.py
 # ─────────────────────────────────────────────────────────────────────────────
-COR_BG        = "#1e1e2e"
-COR_PAINEL    = "#2a2a3e"
-COR_BORDA     = "#3a3a5c"
-COR_ACENTO    = "#7c6af7"
-COR_ACENTO2   = "#5a4fcf"
-COR_TEXTO     = "#e0e0f0"
-COR_TEXTO_SEC = "#9090b0"
-COR_VERDE     = "#2ecc71"
-COR_AMARELO   = "#f39c12"
-COR_VERMELHO  = "#e74c3c"
-COR_CINZA     = "#7f8c8d"
-COR_AZUL      = "#3498db"
-COR_LARANJA   = "#e67e22"
+def _cores():
+    global COR_BG, COR_PAINEL, COR_BORDA, COR_ACENTO, COR_ACENTO2
+    global COR_TEXTO, COR_TEXTO_SEC, COR_VERDE, COR_AMARELO
+    global COR_VERMELHO, COR_CINZA, COR_AZUL, COR_LARANJA
+    COR_BG        = T("BG")
+    COR_PAINEL    = T("PAINEL")
+    COR_BORDA     = T("BORDA")
+    COR_ACENTO    = T("ACENTO")
+    COR_ACENTO2   = T("ACENTO2")
+    COR_TEXTO     = T("TEXTO")
+    COR_TEXTO_SEC = T("TEXTO_SEC")
+    COR_VERDE     = T("VERDE")
+    COR_AMARELO   = T("AMARELO")
+    COR_VERMELHO  = T("VERMELHO")
+    COR_CINZA     = T("CINZA")
+    COR_AZUL      = T("AZUL")
+    COR_LARANJA   = T("LARANJA")
+
+_cores()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PARSING DOS RELATÓRIOS
@@ -82,12 +89,19 @@ def ler_cupom_fiscal(path):
     cupom_atual  = None
     cond_atual   = ""
     vender_atual = ""
+    data_atual   = ""
 
     for linha in linhas:
         linha_strip = linha.strip()
         if not linha_strip:
             continue
         up = linha_strip.upper()
+
+        # ── Data do dia (ex: "DATA : 05/06/2026") ────────────────────────────
+        m_data = re.search(r"DATA\s*:\s*(\d{2}/\d{2}/\d{4})", up)
+        if m_data:
+            data_atual = m_data.group(1)
+            continue
 
         # ── Linha principal do cupom ──────────────────────────────────────────
         m = re.match(r"^(\d{5,})\s+\d{5,}\s+\d+\s+\w+\s+(\S+)\s+(\S+)", linha_strip)
@@ -114,6 +128,7 @@ def ler_cupom_fiscal(path):
                 registros.append({
                     "origem":     "Cupom Fiscal",
                     "referencia": f"Cupom {cupom_atual}",
+                    "data":       data_atual,
                     "valor":      round(valor, 2),
                     "descricao":  (f"VENDA PIX MAQUINETA | Cupom {cupom_atual} "
                                    f"| Cond: {cond_atual} | Vend: {vender_atual}"),
@@ -140,12 +155,19 @@ def ler_nota_fiscal(path):
     nota_atual    = None
     cliente_atual = ""
     cond_atual    = ""
+    data_atual    = ""
 
     for linha in linhas:
         linha_strip = linha.strip()
         if not linha_strip:
             continue
         up = linha_strip.upper()
+
+        # ── Data do dia (ex: "09/06/2026" isolada como cabeçalho de seção) ───
+        m_data = re.match(r"^(\d{2}/\d{2}/\d{4})$", linha_strip.strip())
+        if m_data:
+            data_atual = m_data.group(1)
+            continue
 
         # ── Linha principal da nota ───────────────────────────────────────────
         m = re.match(r"^(\d{5,})\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s{2,}(\S+)\s+([\d\.,]+)", linha_strip)
@@ -173,6 +195,7 @@ def ler_nota_fiscal(path):
                 registros.append({
                     "origem":     "Nota Fiscal",
                     "referencia": f"NF {nota_atual}",
+                    "data":       data_atual,
                     "valor":      round(valor, 2),
                     "descricao":  (f"VENDA PIX MAQUINETA | NF {nota_atual} "
                                    f"| {cliente_atual} | Cond: {cond_atual}"),
@@ -205,10 +228,17 @@ def ler_recibos(path):
 
     registros    = []
     recibo_atual = None
+    data_atual   = ""
 
     for linha in linhas:
         linha_limpa = linha.strip()
         up = linha_limpa.upper()
+
+        # ── Data do dia (ex: "DATA EMISSAO : 05/06/2026") ────────────────────
+        m_data = re.search(r"DATA\s+EMISSAO\s*:\s*(\d{2}/\d{2}/\d{4})", up)
+        if m_data:
+            data_atual = m_data.group(1)
+            continue
 
         # ── Detecta início de recibo ──────────────────────────────────────────
         m_recibo = re.match(r"^(\d+)\s+(\d+)\s+", linha_limpa)
@@ -229,6 +259,7 @@ def ler_recibos(path):
                 recibo_atual = {
                     "origem":     "Recibo",
                     "referencia": f"Recibo {numero_recibo}",
+                    "data":       data_atual,
                     "valor":      0.0,
                     "descricao":  f"DEP. GETNET PIX | Recibo {numero_recibo}",
                     "status":     "pendente",
@@ -396,12 +427,12 @@ def conciliar_automatico(df_vendas, df_banco, tolerancia=0.01):
 
 class ConciliacaoPixMaquinetaApp(tk.Toplevel):
     def __init__(self, master=None):
-        super().__init__(master)
+        super().__init__()
         self.title("Conciliador PIX MAQUINETA — PMZ Peças e Pneus")
-        self.geometry("1600x880")
+        self.geometry("1500x860")
         self.configure(bg=COR_BG)
         self.resizable(True, True)
-        
+        self.grab_set()   
         self.df_vendas = None
         self.df_banco  = None
         self.paths     = {"cupom": None, "nf": None, "recibo": None, "banco": None}
@@ -426,16 +457,17 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
         bar = tk.Frame(self, bg=COR_PAINEL, height=58)
         bar.pack(fill="x")
         bar.pack_propagate(False)
+        self._topbar = bar
 
-        tk.Label(bar, text="🟠  Conciliador PIX MAQUINETA",
+        tk.Label(bar, text="🟠  Conciliador PIX MAQUINETA — PMZ",
                  bg=COR_PAINEL, fg=COR_TEXTO,
                  font=("Segoe UI", 13, "bold")).pack(side="left", padx=16, pady=12)
 
         btns = [
-            ("  Conciliar",   COR_AZUL,    self.conciliar_auto),
-            ("  Manual", COR_VERDE,   self.conciliar_manual),
-            ("  Desconciliar",     COR_AMARELO, self.desconciliar),
-            ("  Ignorar",          COR_CINZA,   self.ignorar),
+            ("🔄  Conciliar Auto",   COR_AZUL,    self.conciliar_auto),
+            ("🤝  Conciliar Manual", COR_VERDE,   self.conciliar_manual),
+            ("🔓  Desconciliar",     COR_AMARELO, self.desconciliar),
+            ("🚫  Ignorar",          COR_CINZA,   self.ignorar),
         ]
         for txt, cor, cmd in btns:
             tk.Button(bar, text=txt, bg=cor, fg="white",
@@ -443,10 +475,82 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
                       padx=12, pady=6, cursor="hand2",
                       command=cmd).pack(side="left", padx=4, pady=12)
 
+        # Botão exportar
+        tk.Button(bar, text="📊  Exportar", bg=COR_LARANJA, fg="white",
+                  font=("Segoe UI", 9, "bold"), relief="flat",
+                  padx=12, pady=6, cursor="hand2",
+                  command=self.exportar).pack(side="left", padx=4, pady=12)
+
+        # ── Filtros inline na topbar ──────────────────────────────────────────
+        sep = tk.Frame(bar, bg=COR_BORDA, width=1)
+        sep.pack(side="left", fill="y", pady=10, padx=6)
+
+        # Status
+        tk.Label(bar, text="Status:", bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 8)).pack(side="left", padx=(4, 2))
+        self.filtro_status = ttk.Combobox(bar, state="readonly", width=11,
+            values=["Todos", "pendente", "parcial", "conciliado", "ignorado"])
+        self.filtro_status.set("Todos")
+        self.filtro_status.pack(side="left", pady=12)
+        self.filtro_status.bind("<<ComboboxSelected>>", lambda _: self.atualizar_tabelas())
+
+        # Data De/Até
+        sep2 = tk.Frame(bar, bg=COR_BORDA, width=1)
+        sep2.pack(side="left", fill="y", pady=10, padx=6)
+
+        tk.Label(bar, text="De:", bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 8)).pack(side="left", padx=(2, 2))
+        self.filtro_data_ini = tk.Entry(bar, width=10, font=("Segoe UI", 8))
+        self.filtro_data_ini.pack(side="left", pady=12)
+
+        tk.Label(bar, text="Até:", bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 8)).pack(side="left", padx=(6, 2))
+        self.filtro_data_fim = tk.Entry(bar, width=10, font=("Segoe UI", 8))
+        self.filtro_data_fim.pack(side="left", pady=12)
+
+        tk.Button(bar, text="🔍", bg=COR_ACENTO2, fg="white",
+                  font=("Segoe UI", 9), relief="flat",
+                  padx=6, pady=4, cursor="hand2",
+                  command=self.atualizar_tabelas).pack(side="left", padx=(4, 0), pady=12)
+
+        tk.Button(bar, text="✖", bg=COR_BG, fg=COR_TEXTO_SEC,
+                  font=("Segoe UI", 9), relief="flat",
+                  padx=4, pady=4, cursor="hand2",
+                  command=self._limpar_filtro_data).pack(side="left", padx=(2, 0), pady=12)
+
+        # Botão de tema — alinhado à direita
+        self._btn_tema = botao_tema(bar, callback=self._aplicar_tema)
+        self._btn_tema.pack(side="right", padx=12, pady=12)
+
     def _build_painel_esq(self, parent):
-        frame = tk.Frame(parent, bg=COR_PAINEL, width=230)
-        frame.pack(side="left", fill="y", padx=(0, 10), pady=10)
-        frame.pack_propagate(False)
+        # Container externo (mantém a largura fixa)
+        outer = tk.Frame(parent, bg=COR_PAINEL, width=230)
+        outer.pack(side="left", fill="y", padx=(0, 10), pady=10)
+        outer.pack_propagate(False)
+
+        # Canvas + frame interno com scroll pela rodinha
+        canvas = tk.Canvas(outer, bg=COR_PAINEL, highlightthickness=0,
+                        width=230)
+        canvas.pack(side="left", fill="both", expand=True)
+
+        frame = tk.Frame(canvas, bg=COR_PAINEL)
+        _win = canvas.create_window((0, 0), window=frame, anchor="nw")
+
+        def _on_resize(e):
+            canvas.itemconfig(_win, width=e.width)
+        canvas.bind("<Configure>", _on_resize)
+
+        def _on_frame_change(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        frame.bind("<Configure>", _on_frame_change)
+
+        def _scroll(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _scroll)      # Windows / macOS
+        canvas.bind_all("<Button-4>",                 # Linux scroll up
+            lambda e: canvas.yview_scroll(-1, "units"))
+        canvas.bind_all("<Button-5>",                 # Linux scroll down
+            lambda e: canvas.yview_scroll(1, "units"))
 
         tk.Label(frame, text="ARQUIVOS", bg=COR_PAINEL, fg=COR_ACENTO,
                  font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=12, pady=(14, 4))
@@ -538,15 +642,8 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
                   font=("Segoe UI", 8), relief="flat", cursor="hand2",
                   command=self.limpar_selecao).pack(anchor="w", padx=12, pady=(6, 0))
 
-        # Filtro status
-        tk.Frame(frame, bg=COR_BORDA, height=1).pack(fill="x", padx=12, pady=8)
-        tk.Label(frame, text="Filtrar status:", bg=COR_PAINEL, fg=COR_TEXTO_SEC,
-                 font=("Segoe UI", 8)).pack(anchor="w", padx=12)
-        self.filtro_status = ttk.Combobox(frame, state="readonly",
-            values=["Todos", "pendente", "parcial", "conciliado", "ignorado"])
-        self.filtro_status.set("Todos")
-        self.filtro_status.pack(fill="x", padx=12, pady=(2, 4))
-        self.filtro_status.bind("<<ComboboxSelected>>", lambda _: self.atualizar_tabelas())
+
+
 
     def _build_tabelas(self, parent):
         frame = tk.Frame(parent, bg=COR_BG)
@@ -613,12 +710,7 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
         self._cfg_tags(self.tree_b)
 
     def _cfg_tags(self, tree):
-        tree.tag_configure("conciliado", background="#1a3a2a", foreground="#2ecc71")
-        tree.tag_configure("parcial",    background="#3a3010", foreground="#f39c12")
-        tree.tag_configure("pendente",   background="#3a1010", foreground="#e74c3c")
-        tree.tag_configure("ignorado",   background="#2a2a2a", foreground="#7f8c8d")
-        tree.tag_configure("selecionado",background="#1a1a5e", foreground="#ffffff")
-        tree.tag_configure("zebra",      background="#252535")
+        aplicar_tags_tree(tree)
 
     def _build_statusbar(self):
         bar = tk.Frame(self, bg=COR_PAINEL, height=26)
@@ -629,17 +721,19 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
                  font=("Segoe UI", 8), anchor="w").pack(side="left", padx=10)
 
     def _aplicar_estilos(self):
-        s = ttk.Style(self)
-        s.theme_use("clam")
-        s.configure("Treeview", background=COR_BG, fieldbackground=COR_BG,
-                    foreground=COR_TEXTO, rowheight=22, font=("Segoe UI", 8))
-        s.configure("Treeview.Heading", background=COR_PAINEL, foreground=COR_ACENTO,
-                    font=("Segoe UI", 8, "bold"), relief="flat")
-        s.map("Treeview", background=[("selected", COR_ACENTO2)])
-        s.configure("TScrollbar", background=COR_PAINEL,
-                    troughcolor=COR_BG, arrowcolor=COR_TEXTO_SEC)
-        s.configure("TCombobox", fieldbackground=COR_BG,
-                    background=COR_BG, foreground=COR_TEXTO)
+        aplicar_estilos_ttk(ttk.Style(self))
+        registrar_callback(self._aplicar_tema)
+
+    def _aplicar_tema(self):
+        """Reaplicar cores de todos os widgets após troca de tema."""
+        _cores()
+        self.configure(bg=T("BG"))
+        aplicar_estilos_ttk(ttk.Style(self))
+        for tree in (self.tree_v, self.tree_b):
+            aplicar_tags_tree(tree)
+        from theme import recolorir_widget
+        recolorir_widget(self)
+        self.atualizar_tabelas()
 
     # ─── Carregamento de arquivos ─────────────────────────────────────────────
 
@@ -887,7 +981,7 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
         self.tree_v.delete(*self.tree_v.get_children())
         if self.df_vendas is None:
             return
-        df = self._filtrar(self.df_vendas, "status", tabela="vendas")
+        df = self._filtrar_v(self.df_vendas)
         for _, (idx, row) in enumerate(df.iterrows()):
             vals = (
                 row.get("origem",     ""),
@@ -910,7 +1004,7 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
         self.tree_b.delete(*self.tree_b.get_children())
         if self.df_banco is None:
             return
-        df = self._filtrar(self.df_banco, "status", tabela="banco")
+        df = self._filtrar_b(self.df_banco)
         for _, (idx, row) in enumerate(df.iterrows()):
             vals = (
                 str(row.get("DT_RECEB",  "")),
@@ -929,31 +1023,62 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
             self._map_b[item]  = idx
             self._rmap_b[idx]  = item
 
-    def _filtrar(self, df, col_status, tabela="vendas"):
-        result = df.copy()
+    def _filtrar_v(self, df):
+        df = self._filtrar(df, "status")
+        df = self._filtrar_data(df, "data")
+        return df
 
-        if tabela == "vendas":
-            f_status = self.filtro_status_v.get()
-            f_valor  = self.filtro_valor_v.get().strip()
-        else:
-            f_status = self.filtro_status_b.get()
-            f_valor  = self.filtro_valor_b.get().strip()
-            f_data   = self.filtro_data_b.get().strip()
-            if f_data:
-                result = result[result["DT_RECEB"].astype(str).str.contains(f_data, na=False)]
+    def _filtrar_b(self, df):
+        df = self._filtrar(df, "status")
+        df = self._filtrar_data(df, "DT_RECEB")
+        return df
 
-        if f_status != "Todos":
-            result = result[result[col_status] == f_status]
+    def _filtrar(self, df, col_status):
+        f = self.filtro_status.get()
+        if f == "Todos":
+            return df
+        return df[df[col_status] == f]
 
-        if f_valor:
-            try:
-                v = float(f_valor.replace(",", "."))
-                col_v = "valor" if tabela == "vendas" else "VALOR"
-                result = result[abs(result[col_v] - v) < 0.01]
-            except ValueError:
-                pass
+    def _filtrar_data(self, df, col):
+        """Filtra por intervalo de data. Espera formato dd/mm/aaaa nas entries."""
+        if col not in df.columns:
+            return df
+        ini_txt = self.filtro_data_ini.get().strip()
+        fim_txt = self.filtro_data_fim.get().strip()
+        if not ini_txt and not fim_txt:
+            return df
 
-        return result
+        def para_data(txt):
+            for fmt in ("%d/%m/%Y", "%d/%m/%y"):
+                try:
+                    return datetime.strptime(txt, fmt).date()
+                except ValueError:
+                    pass
+            return None
+
+        ini = para_data(ini_txt) if ini_txt else None
+        fim = para_data(fim_txt) if fim_txt else None
+
+        def data_linha(v):
+            v = str(v).strip()
+            for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"):
+                try:
+                    return datetime.strptime(v, fmt).date()
+                except ValueError:
+                    pass
+            return None
+
+        mask = pd.Series([True] * len(df), index=df.index)
+        if ini:
+            mask &= df[col].apply(lambda v: (data_linha(v) or datetime.min.date()) >= ini)
+        if fim:
+            mask &= df[col].apply(lambda v: (data_linha(v) or datetime.max.date()) <= fim)
+        return df[mask]
+
+    def _limpar_filtro_data(self):
+        self.filtro_data_ini.delete(0, "end")
+        self.filtro_data_fim.delete(0, "end")
+        self.atualizar_tabelas()
 
 
     def atualizar_resumo(self):
@@ -1267,4 +1392,3 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
         if tree == self.tree_v:
             return self._rmap_v.get(idx)
         return self._rmap_b.get(idx)
-

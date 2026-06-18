@@ -9139,6 +9139,7 @@
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\\Lib\\textwrap.py',
    'PYMODULE'),
+  ('theme', 'C:\\Users\\joao.teles\\Documents\\Prisma\\theme.py', 'PYMODULE'),
   ('threading',
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\\Lib\\threading.py',
