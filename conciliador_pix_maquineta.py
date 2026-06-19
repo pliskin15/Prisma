@@ -252,7 +252,7 @@ def ler_recibos(path):
             recibo_atual = None
 
             # Só captura recibos DEP. GETNET PIX
-            if "DEP. GETNET PIX" in up:
+            if "DEP. PIX MAQUINETA" in up:
                 partes = linha_limpa.split()
                 numero_recibo = partes[1]
 

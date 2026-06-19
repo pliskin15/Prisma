@@ -8,25 +8,31 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import pandas as pd
 import pdfplumber
-import os, re
-
+import os, re, threading, time
+from datetime import datetime
+from theme import T, aplicar_estilos_ttk, aplicar_tags_tree, botao_tema, registrar_callback
 # ─────────────────────────────────────────────────────────────────────────────
 # CORES
 # ─────────────────────────────────────────────────────────────────────────────
-COR_BG        = "#1e1e2e"
-COR_PAINEL    = "#2a2a3e"
-COR_BORDA     = "#3a3a5c"
-COR_ACENTO    = "#7c6af7"
-COR_ACENTO2   = "#5a4fcf"
-COR_TEXTO     = "#e0e0f0"
-COR_TEXTO_SEC = "#9090b0"
-COR_VERDE     = "#2ecc71"
-COR_AMARELO   = "#f39c12"
-COR_VERMELHO  = "#e74c3c"
-COR_CINZA     = "#7f8c8d"
-COR_AZUL      = "#3498db"
-COR_ROXO      = "#9b59b6"
+def _cores():
+    global COR_BG, COR_PAINEL, COR_BORDA, COR_ACENTO, COR_ACENTO2
+    global COR_TEXTO, COR_TEXTO_SEC, COR_VERDE, COR_AMARELO
+    global COR_VERMELHO, COR_CINZA, COR_AZUL, COR_ROXO
+    COR_BG        = T("BG")
+    COR_PAINEL    = T("PAINEL")
+    COR_BORDA     = T("BORDA")
+    COR_ACENTO    = T("ACENTO")
+    COR_ACENTO2   = T("ACENTO2")
+    COR_TEXTO     = T("TEXTO")
+    COR_TEXTO_SEC = T("TEXTO_SEC")
+    COR_VERDE     = T("VERDE")
+    COR_AMARELO   = T("AMARELO")
+    COR_VERMELHO  = T("VERMELHO")
+    COR_CINZA     = T("CINZA")
+    COR_AZUL      = T("AZUL")
+    COR_ROXO      = T("ROXO")
 
+_cores()
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -75,12 +81,19 @@ def ler_cupom_fiscal(path):
     cupom_atual  = None
     cond_atual   = ""
     vender_atual = ""
+    data_atual   = ""
 
     for linha in linhas:
         linha_strip = linha.strip()
         if not linha_strip:
             continue
         up = linha_strip.upper()
+
+        # ── Data do dia (ex: "DATA : 05/06/2026") ────────────────────────────
+        m_data = re.search(r"DATA\s*:\s*(\d{2}/\d{2}/\d{4})", up)
+        if m_data:
+            data_atual = m_data.group(1)
+            continue
 
         m = re.match(r"^(\d{5,})\s+\d{5,}\s+\d+\s+\w+\s+(\S+)\s+(\S+)", linha_strip)
         if m:
@@ -105,6 +118,7 @@ def ler_cupom_fiscal(path):
                     registros.append({
                         "origem":     "Cupom Fiscal",
                         "referencia": f"Cupom {cupom_atual}",
+                        "data":       data_atual,
                         "tipo":       tipo,
                         "valor":      round(valor, 2),
                         "descricao":  (f"{gatilho.title()} | Cupom {cupom_atual} "
@@ -129,12 +143,19 @@ def ler_nota_fiscal(path):
     nota_atual    = None
     cliente_atual = ""
     cond_atual    = ""
+    data_atual    = ""
 
     for linha in linhas:
         linha_strip = linha.strip()
         if not linha_strip:
             continue
         up = linha_strip.upper()
+
+        # ── Data do dia (ex: "09/06/2026" isolada como cabeçalho de seção) ───
+        m_data = re.match(r"^(\d{2}/\d{2}/\d{4})$", linha_strip.strip())
+        if m_data:
+            data_atual = m_data.group(1)
+            continue
 
         m = re.match(r"^(\d{5,})\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s{2,}(\S+)\s+([\d\.,]+)", linha_strip)
         if m:
@@ -163,6 +184,7 @@ def ler_nota_fiscal(path):
                     registros.append({
                         "origem":     "Nota Fiscal",
                         "referencia": f"NF {nota_atual}",
+                        "data":       data_atual,
                         "tipo":       tipo,
                         "valor":      round(valor, 2),
                         "descricao":  (f"{gatilho.title()} | NF {nota_atual} "
@@ -179,20 +201,22 @@ def ler_recibos(path):
     linhas = _extrair_linhas_pdf(path)
     registros    = []
     recibo_atual = None
+    data_atual   = ""
 
     for linha in linhas:
         linha_limpa = linha.strip()
         up = linha_limpa.upper()
 
+        # ── Data do dia (ex: "DATA EMISSAO : 05/06/2026") ────────────────────
+        m_data = re.search(r"DATA\s+EMISSAO\s*:\s*(\d{2}/\d{2}/\d{4})", up)
+        if m_data:
+            data_atual = m_data.group(1)
+            continue
+
         m_recibo = re.match(r"^(\d+)\s+(\d+)\s+", linha_limpa)
         tem_texto_apos = bool(re.search(r"[A-Za-z]", linha_limpa.split(None, 2)[-1])) \
                         if m_recibo else False
-        # Cabecalho de recibo SEMPRE traz "TOTAL :" na mesma linha. Sem essa
-        # exigencia, uma linha de continuacao CODPOS/AUTORIZACAO/DOCUMENTO cujo
-        # campo DOCUMENTO contenha letra (ex.: "3D") era confundida com um novo
-        # cabecalho, descartando o recibo em andamento (valor ainda 0,00) e
-        # ignorando a linha DPP seguinte com o valor real.
-        if m_recibo and tem_texto_apos and "TOTAL" in up:
+        if m_recibo and tem_texto_apos:
             if recibo_atual and recibo_atual["valor"] > 0:
                 registros.append(recibo_atual)
             recibo_atual = None
@@ -215,6 +239,7 @@ def ler_recibos(path):
             recibo_atual = {
                 "origem":     "Recibo",
                 "referencia": f"Recibo {numero_recibo}",
+                "data":       data_atual,
                 "tipo":       tipo_pgto,
                 "valor":      0.0,
                 "descricao":  f"CARTÃO {tipo_pgto.upper()} | Recibo {numero_recibo}",
@@ -413,6 +438,186 @@ def conciliar_automatico(df_vendas, df_banco, tolerancia=0.01):
 
     return dv, db
 
+def _tipo_grupo(tipo: str) -> str:
+    """Agrupa tipos para efeito de conciliação: Débito vs Crédito (inclui Parcelado)."""
+    t = tipo.strip().upper()
+    if "DEBITO" in t or t == "DÉBITO":
+        return "debito"
+    return "credito"
+
+def conciliar_agente(df_vendas, df_banco, cb_progresso=None, cb_log=None):
+    """
+    Agente de conciliação com duas rodadas:
+      Rodada 1 – match exato por valor, mesmo grupo de tipo.
+      Rodada 2 – match por tolerância de ±R$1,00, mesmo grupo de tipo.
+    cb_progresso(pct: float) → atualiza barra (0‑100).
+    cb_log(msg: str)         → exibe mensagem de etapa.
+    """
+    TOL_EXATA  = 0.01
+    TOL_PARCIAL = 1.00
+
+    dv = df_vendas.copy()
+    db = df_banco.copy()
+
+    dv["status"]     = dv.get("status",     "pendente")
+    dv["par_banco"]  = dv.get("par_banco",  "")
+    dv["saldo_rest"] = dv.get("saldo_rest", dv["valor"])
+    db["status"]     = db.get("status",     "pendente")
+    db["par_venda"]  = db.get("par_venda",  "")
+    db["saldo_rest"] = db.get("saldo_rest", db["VALOR"])
+
+    par_counter = [0]
+
+    def novo_par(prefixo="A"):
+        par_counter[0] += 1
+        return f"{prefixo}{par_counter[0]:04d}"
+
+    def set_status_v(idx):
+        r = dv.loc[idx]
+        if not r["par_banco"]:   return "pendente"
+        return "conciliado" if r["saldo_rest"] <= TOL_EXATA else "parcial"
+
+    def set_status_b(idx):
+        r = db.loc[idx]
+        if not r["par_venda"]:   return "pendente"
+        return "conciliado" if r["saldo_rest"] <= TOL_EXATA else "parcial"
+
+    total_v = len(dv)
+    total_b = len(db)
+
+    # ── RODADA 1 — match exato por valor + tipo ───────────────────────────
+    if cb_log: cb_log("🔍  Rodada 1 — match exato por valor e tipo...")
+    if cb_progresso: cb_progresso(5)
+    time.sleep(0.3)
+
+    for i, (iv, row_v) in enumerate(dv.iterrows()):
+        saldo_v = dv.at[iv, "saldo_rest"]
+        if saldo_v <= TOL_EXATA:
+            continue
+        grupo_v = _tipo_grupo(str(row_v.get("tipo", "")))
+        candidatos = db[
+            (db["saldo_rest"] > TOL_EXATA) &
+            (abs(db["VALOR"] - saldo_v) <= TOL_EXATA) &
+            (db["TIPO"].apply(_tipo_grupo) == grupo_v)
+        ]
+        for ib, _ in candidatos.iterrows():
+            saldo_v = dv.at[iv, "saldo_rest"]
+            saldo_b = db.at[ib, "saldo_rest"]
+            if saldo_v <= TOL_EXATA or saldo_b <= TOL_EXATA:
+                continue
+            val = min(saldo_v, saldo_b)
+            par = novo_par("R")
+            dv.at[iv, "par_banco"]  += ("," if dv.at[iv, "par_banco"] else "") + par
+            dv.at[iv, "saldo_rest"]  = round(saldo_v - val, 2)
+            db.at[ib, "par_venda"]  += ("," if db.at[ib, "par_venda"] else "") + par
+            db.at[ib, "saldo_rest"]  = round(saldo_b - val, 2)
+        # progresso de 5 → 50
+        if cb_progresso:
+            cb_progresso(5 + int(45 * (i + 1) / max(total_v, 1)))
+
+    n_r1 = (dv["par_banco"] != "").sum()
+    if cb_log: cb_log(f"   ✅  Rodada 1 concluída — {n_r1} vendas vinculadas.")
+    if cb_progresso: cb_progresso(50)
+    time.sleep(0.4)
+
+    # ── RODADA 2 — tolerância ±R$1,00, mesmo grupo de tipo ───────────────
+    if cb_log: cb_log("🔍  Rodada 2 — tolerância ±R$ 1,00, respeitando tipo...")
+    time.sleep(0.3)
+
+    pendentes_v = dv[dv["saldo_rest"] > TOL_EXATA]
+    for i, (iv, row_v) in enumerate(pendentes_v.iterrows()):
+        saldo_v = dv.at[iv, "saldo_rest"]
+        if saldo_v <= TOL_EXATA:
+            continue
+        grupo_v = _tipo_grupo(str(row_v.get("tipo", "")))
+        candidatos = db[
+            (db["saldo_rest"] > TOL_EXATA) &
+            (abs(db["VALOR"] - saldo_v) <= TOL_PARCIAL) &
+            (db["TIPO"].apply(_tipo_grupo) == grupo_v)
+        ]
+        for ib, _ in candidatos.iterrows():
+            saldo_v = dv.at[iv, "saldo_rest"]
+            saldo_b = db.at[ib, "saldo_rest"]
+            if saldo_v <= TOL_EXATA or saldo_b <= TOL_EXATA:
+                continue
+            val = min(saldo_v, saldo_b)
+            par = novo_par("P")
+            dv.at[iv, "par_banco"]  += ("," if dv.at[iv, "par_banco"] else "") + par
+            dv.at[iv, "saldo_rest"]  = round(saldo_v - val, 2)
+            db.at[ib, "par_venda"]  += ("," if db.at[ib, "par_venda"] else "") + par
+            db.at[ib, "saldo_rest"]  = round(saldo_b - val, 2)
+        # progresso de 50 → 90
+        if cb_progresso:
+            cb_progresso(50 + int(40 * (i + 1) / max(len(pendentes_v), 1)))
+
+    n_r2 = (dv["par_banco"].str.contains("P", na=False)).sum()
+    if cb_log: cb_log(f"   ✅  Rodada 2 concluída — {n_r2} vendas com match parcial.")
+    if cb_progresso: cb_progresso(70)
+    time.sleep(0.3)
+
+    # ── RODADA 3 — match combinado N vendas → 1 banco (mesma data e tipo) ─
+    if cb_log: cb_log("🔍  Rodada 3 — combinação de vendas que somam ao valor do banco...")
+    time.sleep(0.3)
+
+    from itertools import combinations
+
+    pendentes_b3 = db[db["saldo_rest"] > TOL_EXATA].copy()
+    for ib, row_b in pendentes_b3.iterrows():
+        if db.at[ib, "saldo_rest"] <= TOL_EXATA:
+            continue
+        alvo     = round(db.at[ib, "saldo_rest"], 2)
+        grupo_b  = _tipo_grupo(str(row_b.get("TIPO", "")))
+        data_b   = str(row_b.get("DT_VENDA", ""))[:10]
+
+        # candidatos: pendentes, mesmo grupo de tipo, mesma data (se existir data)
+        mask = (
+            (dv["saldo_rest"] > TOL_EXATA) &
+            (dv["tipo"].apply(_tipo_grupo) == grupo_b) &
+            (dv["valor"] < alvo + TOL_EXATA)
+        )
+        if data_b:
+            mask &= (dv["data"].astype(str).str[:10] == data_b)
+        cands = dv[mask]
+
+        if len(cands) < 2:
+            continue
+
+        # Tenta combinações de 2 até min(6, len) vendas
+        achou = False
+        for tamanho in range(2, min(7, len(cands) + 1)):
+            if achou:
+                break
+            for combo in combinations(cands.index, tamanho):
+                soma = round(sum(dv.at[ix, "saldo_rest"] for ix in combo), 2)
+                if abs(soma - alvo) <= TOL_EXATA:
+                    par = novo_par("C")
+                    for ix in combo:
+                        sv = dv.at[ix, "saldo_rest"]
+                        dv.at[ix, "par_banco"]  += ("," if dv.at[ix, "par_banco"] else "") + par
+                        dv.at[ix, "saldo_rest"]  = 0.0
+                    db.at[ib, "par_venda"]  += ("," if db.at[ib, "par_venda"] else "") + par
+                    db.at[ib, "saldo_rest"]  = 0.0
+                    if cb_log:
+                        refs = " + ".join(str(dv.at[ix, "referencia"]) for ix in combo)
+                        cb_log(f"   🔗  Combo {par}: [{refs}] = R$ {soma:.2f} → banco R$ {alvo:.2f}")
+                    achou = True
+                    break
+
+    n_r3 = (dv["par_banco"].str.contains("C", na=False)).sum()
+    if cb_log: cb_log(f"   ✅  Rodada 3 concluída — {n_r3} vendas em combinações.")
+    if cb_progresso: cb_progresso(90)
+    time.sleep(0.3)
+
+    # ── Status final ──────────────────────────────────────────────────────
+    if cb_log: cb_log("📊  Calculando status final e gerando relatório...")
+    time.sleep(0.2)
+
+    dv["status"] = [set_status_v(iv) for iv in dv.index]
+    db["status"] = [set_status_b(ib) for ib in db.index]
+
+    if cb_progresso: cb_progresso(100)
+    return dv, db
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # INTERFACE
@@ -449,20 +654,76 @@ class ConciliacaoApp(tk.Toplevel):
         bar = tk.Frame(self, bg=COR_PAINEL, height=58)
         bar.pack(fill="x")
         bar.pack_propagate(False)
+        self._topbar = bar
+
         tk.Label(bar, text="💳  Conciliador CARTÕES — PMZ",
                  bg=COR_PAINEL, fg=COR_TEXTO,
                  font=("Segoe UI", 13, "bold")).pack(side="left", padx=16, pady=12)
 
+        self._btns_topbar = []
         for txt, cor, cmd in [
+            ("⚡  Agente de Conciliação",  COR_ROXO,    self.modo_automatico),
             ("🔄  Conciliar Auto",   COR_AZUL,    self.conciliar_auto),
             ("🤝  Conciliar Manual", COR_VERDE,   self.conciliar_manual),
             ("🔓  Desconciliar",     COR_AMARELO, self.desconciliar),
             ("🚫  Ignorar",          COR_CINZA,   self.ignorar),
+            ("📊  Exportar XLSX",    COR_ROXO,    self.exportar_xlsx),
         ]:
-            tk.Button(bar, text=txt, bg=cor, fg="white",
-                      font=("Segoe UI", 9, "bold"), relief="flat",
-                      padx=12, pady=6, cursor="hand2",
-                      command=cmd).pack(side="left", padx=4, pady=12)
+            b = tk.Button(bar, text=txt, bg=cor, fg="white",
+                          font=("Segoe UI", 9, "bold"), relief="flat",
+                          padx=12, pady=6, cursor="hand2",
+                          command=cmd)
+            b.pack(side="left", padx=4, pady=12)
+            self._btns_topbar.append(b)
+
+        # ── Filtros inline na topbar ──────────────────────────────────────────
+        sep = tk.Frame(bar, bg=COR_BORDA, width=1)
+        sep.pack(side="left", fill="y", pady=10, padx=6)
+
+        # Status
+        tk.Label(bar, text="Status:", bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 8)).pack(side="left", padx=(4, 2))
+        self.filtro_status = ttk.Combobox(bar, state="readonly", width=11,
+            values=["Todos", "pendente", "parcial", "conciliado", "ignorado"])
+        self.filtro_status.set("Todos")
+        self.filtro_status.pack(side="left", pady=12)
+        self.filtro_status.bind("<<ComboboxSelected>>", lambda _: self.atualizar_tabelas())
+
+        # Tipo
+        tk.Label(bar, text="Tipo:", bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 8)).pack(side="left", padx=(8, 2))
+        self.filtro_tipo = ttk.Combobox(bar, state="readonly", width=14,
+            values=["Todos", "Débito", "Crédito", "Crédito Parcelado"])
+        self.filtro_tipo.set("Todos")
+        self.filtro_tipo.pack(side="left", pady=12)
+        self.filtro_tipo.bind("<<ComboboxSelected>>", lambda _: self.atualizar_tabelas())
+
+        # Data De/Até
+        sep2 = tk.Frame(bar, bg=COR_BORDA, width=1)
+        sep2.pack(side="left", fill="y", pady=10, padx=6)
+
+        tk.Label(bar, text="De:", bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 8)).pack(side="left", padx=(2, 2))
+        self.filtro_data_ini = tk.Entry(bar, width=10, font=("Segoe UI", 8))
+        self.filtro_data_ini.pack(side="left", pady=12)
+
+        tk.Label(bar, text="Até:", bg=COR_PAINEL, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 8)).pack(side="left", padx=(6, 2))
+        self.filtro_data_fim = tk.Entry(bar, width=10, font=("Segoe UI", 8))
+        self.filtro_data_fim.pack(side="left", pady=12)
+
+        tk.Button(bar, text="🔍", bg=COR_ACENTO2, fg="white",
+                  font=("Segoe UI", 9), relief="flat",
+                  padx=6, pady=4, cursor="hand2",
+                  command=self.atualizar_tabelas).pack(side="left", padx=(4, 0), pady=12)
+
+        tk.Button(bar, text="✖", bg=COR_BG, fg=COR_TEXTO_SEC,
+                  font=("Segoe UI", 9), relief="flat",
+                  padx=4, pady=4, cursor="hand2",
+                  command=self._limpar_filtro_data).pack(side="left", padx=(2, 0), pady=12)
+
+        self._btn_tema = botao_tema(bar, callback=self._aplicar_tema)
+        self._btn_tema.pack(side="right", padx=12, pady=12)
 
     def _build_painel_esq(self, parent):
         frame = tk.Frame(parent, bg=COR_PAINEL, width=235)
@@ -489,7 +750,6 @@ class ConciliacaoApp(tk.Toplevel):
             lbl.pack(anchor="w", padx=14, pady=(0, 4))
             self.lbl_paths[chave] = lbl
 
-        # Resumo Vendas
         tk.Frame(frame, bg=COR_BORDA, height=1).pack(fill="x", padx=12, pady=8)
         tk.Label(frame, text="RESUMO VENDAS CARTÃO", bg=COR_PAINEL, fg=COR_ACENTO,
                  font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=12)
@@ -512,7 +772,6 @@ class ConciliacaoApp(tk.Toplevel):
             l.pack(side="right")
             self.lbl_res[k] = l
 
-        # Resumo Banco
         tk.Frame(frame, bg=COR_BORDA, height=1).pack(fill="x", padx=12, pady=6)
         tk.Label(frame, text="RESUMO EXTRATO CARTÕES", bg=COR_PAINEL, fg=COR_ACENTO,
                  font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=12)
@@ -533,7 +792,6 @@ class ConciliacaoApp(tk.Toplevel):
             l.pack(side="right")
             self.lbl_res[k] = l
 
-        # Manual
         tk.Frame(frame, bg=COR_BORDA, height=1).pack(fill="x", padx=12, pady=8)
         tk.Label(frame, text="MANUAL", bg=COR_PAINEL, fg=COR_ACENTO,
                  font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=12)
@@ -558,30 +816,10 @@ class ConciliacaoApp(tk.Toplevel):
                   font=("Segoe UI", 8), relief="flat", cursor="hand2",
                   command=self.limpar_selecao).pack(anchor="w", padx=12, pady=(6, 0))
 
-        # Filtro
-        tk.Frame(frame, bg=COR_BORDA, height=1).pack(fill="x", padx=12, pady=8)
-        tk.Label(frame, text="Filtrar status:", bg=COR_PAINEL, fg=COR_TEXTO_SEC,
-                 font=("Segoe UI", 8)).pack(anchor="w", padx=12)
-        self.filtro_status = ttk.Combobox(frame, state="readonly",
-            values=["Todos", "pendente", "parcial", "conciliado", "ignorado"])
-        self.filtro_status.set("Todos")
-        self.filtro_status.pack(fill="x", padx=12, pady=(2, 4))
-        self.filtro_status.bind("<<ComboboxSelected>>", lambda _: self.atualizar_tabelas())
-
-        # Filtro tipo
-        tk.Label(frame, text="Filtrar tipo:", bg=COR_PAINEL, fg=COR_TEXTO_SEC,
-                 font=("Segoe UI", 8)).pack(anchor="w", padx=12)
-        self.filtro_tipo = ttk.Combobox(frame, state="readonly",
-            values=["Todos", "Débito", "Crédito", "Crédito Parcelado"])
-        self.filtro_tipo.set("Todos")
-        self.filtro_tipo.pack(fill="x", padx=12, pady=(2, 4))
-        self.filtro_tipo.bind("<<ComboboxSelected>>", lambda _: self.atualizar_tabelas())
-
     def _build_tabelas(self, parent):
         frame = tk.Frame(parent, bg=COR_BG)
         frame.pack(side="left", fill="both", expand=True, pady=10)
 
-        # ── Tabela superior: Vendas ───────────────────────────────────────────
         tk.Label(frame,
                  text="VENDAS CARTÃO  (Cupom Fiscal + Nota Fiscal + Recibos)",
                  bg=COR_BG, fg=COR_ACENTO,
@@ -590,18 +828,18 @@ class ConciliacaoApp(tk.Toplevel):
         frm_v = tk.Frame(frame, bg=COR_BG)
         frm_v.pack(fill="both", expand=True)
 
-        self.cols_v = ["origem", "referencia", "tipo", "valor",
+        self.cols_v = ["origem", "referencia", "data", "tipo", "valor",
                        "saldo_rest", "descricao", "status", "par_banco"]
         self.tree_v = ttk.Treeview(frm_v, columns=self.cols_v,
                                    show="headings", selectmode="extended", height=12)
-        largs_v = {"origem": 80, "referencia": 100, "tipo": 80, "valor": 80,
+        largs_v = {"origem": 80, "referencia": 100, "data": 80, "tipo": 80, "valor": 80,
                    "saldo_rest": 80, "descricao": 380, "status": 80, "par_banco": 80}
         for col in self.cols_v:
             self.tree_v.heading(col, text=col.upper())
             self.tree_v.column(col, width=largs_v.get(col, 90),
                                anchor="center" if col in ("valor", "saldo_rest",
                                                           "status", "par_banco",
-                                                          "tipo") else "w")
+                                                          "tipo", "data") else "w")
         sb_vy = ttk.Scrollbar(frm_v, orient="vertical",   command=self.tree_v.yview)
         sb_vx = ttk.Scrollbar(frm_v, orient="horizontal", command=self.tree_v.xview)
         self.tree_v.configure(yscrollcommand=sb_vy.set, xscrollcommand=sb_vx.set)
@@ -611,7 +849,6 @@ class ConciliacaoApp(tk.Toplevel):
         self.tree_v.bind("<ButtonRelease-1>", self._on_click_venda)
         self._cfg_tags(self.tree_v)
 
-        # ── Tabela inferior: Extrato Cartões ─────────────────────────────────
         tk.Label(frame, text="EXTRATO CARTÕES — BANCO (XLSX)",
                  bg=COR_BG, fg=COR_ROXO,
                  font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(8, 2))
@@ -644,11 +881,7 @@ class ConciliacaoApp(tk.Toplevel):
         self._cfg_tags(self.tree_b)
 
     def _cfg_tags(self, tree):
-        tree.tag_configure("conciliado", background="#1a3a2a", foreground="#2ecc71")
-        tree.tag_configure("parcial",    background="#3a3010", foreground="#f39c12")
-        tree.tag_configure("pendente",   background="#3a1010", foreground="#e74c3c")
-        tree.tag_configure("ignorado",   background="#2a2a2a", foreground="#7f8c8d")
-        tree.tag_configure("selecionado",background="#1a1a5e", foreground="#ffffff")
+        aplicar_tags_tree(tree)
 
     def _build_statusbar(self):
         bar = tk.Frame(self, bg=COR_PAINEL, height=26)
@@ -659,19 +892,19 @@ class ConciliacaoApp(tk.Toplevel):
                  font=("Segoe UI", 8), anchor="w").pack(side="left", padx=10)
 
     def _aplicar_estilos(self):
-        s = ttk.Style(self)
-        s.theme_use("clam")
-        s.configure("Treeview", background=COR_BG, fieldbackground=COR_BG,
-                    foreground=COR_TEXTO, rowheight=22, font=("Segoe UI", 8))
-        s.configure("Treeview.Heading", background=COR_PAINEL, foreground=COR_ACENTO,
-                    font=("Segoe UI", 8, "bold"), relief="flat")
-        s.map("Treeview", background=[("selected", COR_ACENTO2)])
-        s.configure("TScrollbar", background=COR_PAINEL,
-                    troughcolor=COR_BG, arrowcolor=COR_TEXTO_SEC)
-        s.configure("TCombobox", fieldbackground=COR_BG,
-                    background=COR_BG, foreground=COR_TEXTO)
+        aplicar_estilos_ttk(ttk.Style(self))
+        registrar_callback(self._aplicar_tema)
 
-    # ─── Carregamento ─────────────────────────────────────────────────────────
+    def _aplicar_tema(self):
+        _cores()
+        self.configure(bg=T("BG"))
+        aplicar_estilos_ttk(ttk.Style(self))
+        for tree in (self.tree_v, self.tree_b):
+            aplicar_tags_tree(tree)
+        from theme import recolorir_widget
+        recolorir_widget(self)
+        self.atualizar_tabelas()
+
 
     def _carregar(self, chave, func, label, eh_pdf=True):
         ft_pdf   = [("PDF",   "*.pdf"),               ("Todos", "*.*")]
@@ -743,26 +976,426 @@ class ConciliacaoApp(tk.Toplevel):
         self.atualizar_tabelas()
         self.atualizar_resumo()
 
-    # ─── Ações ────────────────────────────────────────────────────────────────
 
+    # ── Pop-up modal do agente ────────────────────────────────────────────
+    def _abrir_popup_agente(self, titulo="Agente de Conciliação"):
+        """Cria e retorna um dict com os widgets do pop-up modal."""
+        pop = tk.Toplevel(self)
+        pop.title(titulo)
+        pop.resizable(False, False)
+        pop.configure(bg=COR_PAINEL)
+        pop.grab_set()          # bloqueia janela principal
+        pop.protocol("WM_DELETE_WINDOW", lambda: None)  # impede fechar manualmente
+
+        # Centralizar na janela principal
+        self.update_idletasks()
+        pw, ph = 480, 320
+        rx = self.winfo_rootx() + (self.winfo_width()  - pw) // 2
+        ry = self.winfo_rooty() + (self.winfo_height() - ph) // 2
+        pop.geometry(f"{pw}x{ph}+{rx}+{ry}")
+
+        # Cabeçalho
+        tk.Label(pop, text=titulo, bg=COR_PAINEL, fg=COR_ACENTO,
+                 font=("Segoe UI", 11, "bold")).pack(pady=(18, 6))
+
+        # Barra de progresso
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure("verde.Horizontal.TProgressbar",
+                        troughcolor=COR_PAINEL,   # cor do fundo da barra
+                background="#27AE60") 
+        prog_var = tk.DoubleVar(value=0)
+        pb = ttk.Progressbar(pop, variable=prog_var, maximum=100,
+                             length=420, mode="determinate",style="verde.Horizontal.TProgressbar")
+        pb.pack(padx=24, pady=(0, 4))
+
+        lbl_pct = tk.Label(pop, text="0% concluído", bg=COR_PAINEL,
+                           fg=COR_TEXTO_SEC, font=("Segoe UI", 8))
+        lbl_pct.pack()
+
+        # Área de log
+        frm_log = tk.Frame(pop, bg=COR_BG, bd=1, relief="sunken")
+        frm_log.pack(fill="both", expand=True, padx=24, pady=(8, 8))
+        log = tk.Text(frm_log, bg=COR_BG, fg=COR_TEXTO_SEC,
+                      font=("Consolas", 8), relief="flat",
+                      state="disabled", wrap="word")
+        sb  = ttk.Scrollbar(frm_log, command=log.yview)
+        log.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        log.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # Botão Fechar (desabilitado até terminar)
+        btn_fechar = tk.Button(pop, text="Aguarde...", state="disabled",
+                               bg=COR_AZUL, fg="white",
+                               font=("Segoe UI", 9, "bold"), relief="flat",
+                               padx=16, pady=6, cursor="hand2",
+                               command=pop.destroy)
+        btn_fechar.pack(pady=(0, 16))
+
+        def cb_prog(pct):
+            self.after(0, lambda p=pct: (
+                prog_var.set(p),
+                lbl_pct.config(text=f"{int(p)}% concluído")
+            ))
+
+        def cb_log(msg):
+            def _ins(m=msg):
+                log.config(state="normal")
+                log.insert("end", m + "\n")
+                log.see("end")
+                log.config(state="disabled")
+            self.after(0, _ins)
+
+        def habilitar_fechar(msg_final=""):
+            def _habilitar(m=msg_final):
+                btn_fechar.config(text="✅  Fechar", state="normal")
+                pop.protocol("WM_DELETE_WINDOW", pop.destroy)
+                if m:
+                    cb_log(m)
+            self.after(0, _habilitar)
+
+        def habilitar_fechar_erro(msg_erro=""):
+            def _habilitar(m=msg_erro):
+                btn_fechar.config(text="❌  Fechar", state="normal", bg=COR_VERMELHO)
+                pop.protocol("WM_DELETE_WINDOW", pop.destroy)
+                if m:
+                    cb_log(m)
+            self.after(0, _habilitar)
+
+        return dict(popup=pop, cb_prog=cb_prog, cb_log=cb_log,
+                    habilitar_fechar=habilitar_fechar,
+                    habilitar_fechar_erro=habilitar_fechar_erro)
+
+    def _set_btns_estado(self, ativo: bool):
+        state = "normal" if ativo else "disabled"
+        for b in self._btns_topbar:
+            b.config(state=state)
+
+    # ── Conciliar Auto (agente com pop-up) ───────────────────────────────
     def conciliar_auto(self):
         if self.df_vendas is None or self.df_banco is None:
             messagebox.showwarning("Aviso",
                 "Carregue os relatórios de vendas e o extrato do banco primeiro.")
             return
-        self.status_var.set("⏳ Conciliando automaticamente...")
-        self.update()
-        self.df_vendas, self.df_banco = conciliar_automatico(
-            self.df_vendas, self.df_banco)
+
+        self._set_btns_estado(False)
+        self.status_var.set("⏳ Agente conciliando... aguarde.")
+
+        ui = self._abrir_popup_agente("Agente de Conciliação")
+        dv_snap = self.df_vendas.copy()
+        db_snap = self.df_banco.copy()
+
+        def _rodar():
+            try:
+                dv_res, db_res = conciliar_agente(
+                    dv_snap, db_snap,
+                    cb_progresso=ui["cb_prog"],
+                    cb_log=ui["cb_log"]
+                )
+                self.after(0, lambda: self._finalizar_agente(dv_res, db_res, ui))
+            except Exception as exc:
+                import traceback
+                ui["habilitar_fechar_erro"](f"❌ Erro: {exc}\n{traceback.format_exc()}")
+                self.after(0, lambda e=exc: self._erro_agente_status(e))
+
+        threading.Thread(target=_rodar, daemon=True).start()
+
+    def _finalizar_agente(self, dv_res, db_res, ui):
+        self.df_vendas = dv_res
+        self.df_banco  = db_res
         self.limpar_selecao()
         self.atualizar_tabelas()
         self.atualizar_resumo()
+        self._set_btns_estado(True)
         n_cv = (self.df_vendas["status"] == "conciliado").sum()
         n_pv = (self.df_vendas["status"] == "pendente").sum()
         n_cb = (self.df_banco["status"]  == "conciliado").sum()
         n_pb = (self.df_banco["status"]  == "pendente").sum()
-        self.status_var.set(
-            f"🔄 Auto concluída — Vendas: ✅{n_cv} ❌{n_pv} | Banco: ✅{n_cb} ❌{n_pb}")
+        msg = f"✅ Agente concluído — Vendas: ✅{n_cv} ❌{n_pv} | Banco: ✅{n_cb} ❌{n_pb}"
+        self.status_var.set(msg)
+        ui["habilitar_fechar"](f"\n{msg}")
+
+    def _erro_agente_status(self, exc):
+        self._set_btns_estado(True)
+        self.status_var.set(f"❌ Erro no agente: {exc}")
+
+    # ── Diálogo de confirmação estilizado ────────────────────────────────
+    def _dialogo_confirmar_auto(self, pasta, pdfs_cf, pdfs_nf, pdfs_r, xlsx_banco, nome_saida):
+        """Abre um modal customizado e retorna True se o usuário confirmar."""
+        resultado = [False]
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Agente de Conciliação")
+        dlg.resizable(False, False)
+        dlg.configure(bg=COR_PAINEL)
+        dlg.grab_set()
+
+        # Centralizar
+        self.update_idletasks()
+        w, h = 480, 390
+        rx = self.winfo_rootx() + (self.winfo_width()  - w) // 2
+        ry = self.winfo_rooty() + (self.winfo_height() - h) // 2
+        dlg.geometry(f"{w}x{h}+{rx}+{ry}")
+
+        # ── Cabeçalho ─────────────────────────────────────────────────────
+        hdr = tk.Frame(dlg, bg=COR_AZUL, height=52)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="⚡  Agente de Conciliação", bg=COR_AZUL, fg="white",
+                 font=("Segoe UI", 13, "bold")).pack(side="left", padx=18, pady=12)
+
+        # ── Corpo ─────────────────────────────────────────────────────────
+        body = tk.Frame(dlg, bg=COR_PAINEL)
+        body.pack(fill="both", expand=True, padx=24, pady=(16, 8))
+
+        # Pasta
+        tk.Label(body, text="PASTA DE ORIGEM", bg=COR_PAINEL, fg=COR_ACENTO,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        frm_pasta = tk.Frame(body, bg=COR_BG, bd=0)
+        frm_pasta.pack(fill="x", pady=(2, 12))
+        tk.Label(frm_pasta, text=pasta, bg=COR_BG, fg=COR_TEXTO_SEC,
+                 font=("Consolas", 8), wraplength=420, justify="left",
+                 padx=8, pady=6).pack(fill="x")
+
+        # Arquivos encontrados
+        tk.Label(body, text="ARQUIVOS ENCONTRADOS", bg=COR_PAINEL, fg=COR_ACENTO,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w")
+
+        frm_arqs = tk.Frame(body, bg=COR_BG)
+        frm_arqs.pack(fill="x", pady=(2, 12))
+
+        itens = [
+            ("📄", "Cupom Fiscal",  "cf*.pdf",         pdfs_cf),
+            ("🧾", "Nota Fiscal",   "nf*.pdf",         pdfs_nf),
+            ("📋", "Recibos",       "r*.pdf",           pdfs_r),
+            ("🏦", "Extrato Banco", "pagamentos*.xlsx", xlsx_banco),
+        ]
+        for icone, label, padrao, lista in itens:
+            qtd   = len(lista)
+            cor   = COR_VERDE if qtd > 0 else COR_VERMELHO
+            linha = tk.Frame(frm_arqs, bg=COR_BG)
+            linha.pack(fill="x", padx=8, pady=2)
+            tk.Label(linha, text=f"{icone} {label}", bg=COR_BG, fg=COR_TEXTO,
+                     font=("Segoe UI", 9), width=18, anchor="w").pack(side="left")
+            tk.Label(linha, text=f"({padrao})", bg=COR_BG, fg=COR_TEXTO_SEC,
+                     font=("Segoe UI", 8), width=18, anchor="w").pack(side="left")
+            tk.Label(linha, text=f"{qtd} arquivo(s)", bg=COR_BG, fg=cor,
+                     font=("Segoe UI", 9, "bold")).pack(side="left")
+
+        # Saída
+        tk.Label(body, text="RELATÓRIO DE SAÍDA", bg=COR_PAINEL, fg=COR_ACENTO,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        frm_out = tk.Frame(body, bg=COR_BG)
+        frm_out.pack(fill="x", pady=(2, 0))
+        tk.Label(frm_out, text=f"📊  {nome_saida}", bg=COR_BG, fg=COR_VERDE,
+                 font=("Segoe UI", 9), padx=8, pady=6).pack(anchor="w")
+
+        # ── Rodapé com botões ─────────────────────────────────────────────
+        sep = tk.Frame(dlg, bg=COR_BORDA, height=1)
+        sep.pack(fill="x", padx=0, pady=(8, 0))
+
+        rodape = tk.Frame(dlg, bg=COR_PAINEL)
+        rodape.pack(fill="x", padx=24, pady=12)
+
+        def _cancelar():
+            resultado[0] = False
+            dlg.destroy()
+
+        def _confirmar():
+            resultado[0] = True
+            dlg.destroy()
+
+        tk.Button(rodape, text="Cancelar", bg=COR_CINZA, fg="white",
+                  font=("Segoe UI", 9, "bold"), relief="flat",
+                  padx=16, pady=7, cursor="hand2",
+                  command=_cancelar).pack(side="right", padx=(8, 0))
+
+        tk.Button(rodape, text="⚡  Iniciar", bg=COR_AZUL, fg="white",
+                  font=("Segoe UI", 9, "bold"), relief="flat",
+                  padx=20, pady=7, cursor="hand2",
+                  command=_confirmar).pack(side="right")
+
+        dlg.bind("<Return>", lambda e: _confirmar())
+        dlg.bind("<Escape>", lambda e: _cancelar())
+
+        self.wait_window(dlg)
+        return resultado[0]
+
+    # ── Modo Automático ───────────────────────────────────────────────────
+    def modo_automatico(self):
+        """
+        Usa a pasta raiz do aplicativo automaticamente.
+        Detecta: *nf*.pdf, *cf*.pdf, *r*.pdf, *pagamentos*.xlsx
+        Exporta: conciliacao_cartao_AAAA-MM-DD_HHMM.xlsx na mesma pasta.
+        """
+        # Pasta raiz = diretório do próprio script
+        pasta = os.path.dirname(os.path.abspath(__file__))
+
+        # Detectar arquivos
+        try:
+            arquivos = os.listdir(pasta)
+        except Exception as e:
+            messagebox.showerror("Erro", f"Não foi possível listar a pasta:\n{pasta}\n\n{e}")
+            return
+
+        def _encontrar(padrao_nome, extensao):
+            p = padrao_nome.lower()
+            e = extensao.lower()
+            return [
+                os.path.join(pasta, f) for f in arquivos
+                if f.lower().endswith(e) and p in f.lower()
+            ]
+
+        pdfs_cf    = _encontrar("cf",         ".pdf")
+        pdfs_nf    = _encontrar("nf",         ".pdf")
+        pdfs_r     = _encontrar("r",          ".pdf")
+        xlsx_banco = _encontrar("pagamentos", ".xlsx")
+
+        if not xlsx_banco:
+            messagebox.showerror("Arquivo não encontrado",
+                f"Nenhum arquivo 'pagamentos*.xlsx' encontrado em:\n{pasta}")
+            return
+        if not (pdfs_cf or pdfs_nf or pdfs_r):
+            messagebox.showerror("Arquivo não encontrado",
+                f"Nenhum PDF de vendas (cf/nf/r) encontrado em:\n{pasta}")
+            return
+
+        # Nome do relatório com timestamp
+        ts = datetime.now().strftime("%Y-%m-%d_%H%M")
+        path_saida = os.path.join(pasta, f"conciliacao_cartao_{ts}.xlsx")
+
+        confirmado = self._dialogo_confirmar_auto(
+            pasta, pdfs_cf, pdfs_nf, pdfs_r, xlsx_banco,
+            os.path.basename(path_saida)
+        )
+        if not confirmado:
+            return
+
+        # Abre pop-up modal e inicia thread
+        self._set_btns_estado(False)
+        self.status_var.set("⚡ Agente em execução...")
+        ui = self._abrir_popup_agente("⚡ Agente — Processamento Completo")
+
+        def _rodar():
+            try:
+                log = ui["cb_log"]
+                prog = ui["cb_prog"]
+
+                # ── Etapa 1: Carregar PDFs ────────────────────────────────
+                log("📂 Carregando arquivos da pasta...")
+                prog(5)
+
+                partes = []
+
+                for i, path in enumerate(pdfs_cf):
+                    log(f"  📄 Cupom Fiscal: {os.path.basename(path)}")
+                    df = ler_cupom_fiscal(path)
+                    partes.append(df)
+                    prog(5 + int(15 * (i + 1) / max(len(pdfs_cf), 1)))
+
+                for i, path in enumerate(pdfs_nf):
+                    log(f"  🧾 Nota Fiscal: {os.path.basename(path)}")
+                    df = ler_nota_fiscal(path)
+                    partes.append(df)
+                    prog(20 + int(10 * (i + 1) / max(len(pdfs_nf), 1)))
+
+                for i, path in enumerate(pdfs_r):
+                    log(f"  📋 Recibo: {os.path.basename(path)}")
+                    df = ler_recibos(path)
+                    partes.append(df)
+                    prog(30 + int(5 * (i + 1) / max(len(pdfs_r), 1)))
+
+                if not partes:
+                    raise ValueError("Nenhum dado de venda pôde ser lido dos PDFs.")
+
+                log(f"\n  ✅ Vendas carregadas: {sum(len(p) for p in partes)} registros")
+
+                # ── Etapa 2: Carregar extrato ─────────────────────────────
+                log(f"\n🏦 Carregando extrato: {os.path.basename(xlsx_banco[0])}")
+                df_banco = ler_mov_cartao(xlsx_banco[0])
+                log(f"  ✅ Extrato carregado: {len(df_banco)} registros")
+                prog(40)
+
+                # ── Etapa 3: Unificar vendas ──────────────────────────────
+                log("\n🔗 Unificando registros de vendas...")
+                df_vendas = pd.concat(partes, ignore_index=True)
+                df_vendas["status"]     = "pendente"
+                df_vendas["par_banco"]  = ""
+                df_vendas["saldo_rest"] = df_vendas["valor"]
+                df_banco["status"]      = "pendente"
+                df_banco["par_venda"]   = ""
+                df_banco["saldo_rest"]  = df_banco["VALOR"]
+                log(f"  ✅ Total: {len(df_vendas)} vendas | {len(df_banco)} registros banco")
+                prog(45)
+
+                # ── Etapa 4: Agente de conciliação ────────────────────────
+                log("\n🤖 Iniciando agente de conciliação...\n")
+
+                def cb_prog_agente(pct):
+                    # Escala de 45 → 85
+                    prog(45 + int(40 * pct / 100))
+
+                df_vendas, df_banco = conciliar_agente(
+                    df_vendas, df_banco,
+                    cb_progresso=cb_prog_agente,
+                    cb_log=log
+                )
+                prog(88)
+
+                # ── Etapa 5: Atualizar UI ─────────────────────────────────
+                def _atualizar_ui():
+                    self.df_vendas  = df_vendas
+                    self.df_banco   = df_banco
+                    self._df_cupom  = pd.concat([p for p in partes], ignore_index=True) if partes else None
+                    # Atualiza labels dos arquivos no painel esq
+                    nomes_cf = ", ".join(os.path.basename(p) for p in pdfs_cf) or "—"
+                    nomes_nf = ", ".join(os.path.basename(p) for p in pdfs_nf) or "—"
+                    nomes_r  = ", ".join(os.path.basename(p) for p in pdfs_r)  or "—"
+                    self.lbl_paths["cupom"].config( text=f"✅ {nomes_cf}")
+                    self.lbl_paths["nf"].config(    text=f"✅ {nomes_nf}")
+                    self.lbl_paths["recibo"].config( text=f"✅ {nomes_r}")
+                    self.lbl_paths["banco"].config(  text=f"✅ {os.path.basename(xlsx_banco[0])}")
+                    self.limpar_selecao()
+                    self.atualizar_tabelas()
+                    self.atualizar_resumo()
+                self.after(0, _atualizar_ui)
+
+                # ── Etapa 6: Exportar XLSX ────────────────────────────────
+                log("\n📊 Exportando relatório XLSX...")
+                prog(90)
+
+                # Exporta usando o método existente, mas com path fixo
+                self.after(0, lambda: self._exportar_xlsx_path(df_vendas, df_banco, path_saida, ui))
+
+            except Exception as exc:
+                import traceback
+                ui["habilitar_fechar_erro"](f"❌ Erro: {exc}\n{traceback.format_exc()}")
+                self.after(0, lambda e=exc: (
+                    self._set_btns_estado(True),
+                    self.status_var.set(f"❌ Erro no Agente: {e}")
+                ))
+
+        threading.Thread(target=_rodar, daemon=True).start()
+
+    def _exportar_xlsx_path(self, df_vendas, df_banco, path_out, ui):
+        """Chama _exportar_para com path e dataframes fixos (sem filedialog)."""
+        try:
+            self._exportar_para(path_out, df_vendas=df_vendas, df_banco=df_banco, silencioso=True)
+            self._set_btns_estado(True)
+            n_cv = (df_vendas["status"] == "conciliado").sum()
+            n_pv = (df_vendas["status"] == "pendente").sum()
+            n_cb = (df_banco["status"]  == "conciliado").sum()
+            n_pb = (df_banco["status"]  == "pendente").sum()
+            msg = (f"⚡ Agente concluído!\n"
+                   f"Vendas: ✅{n_cv} ❌{n_pv} | Banco: ✅{n_cb} ❌{n_pb}\n"
+                   f"Relatório salvo em: {path_out}")
+            self.status_var.set(f"⚡ Concluído — Vendas ✅{n_cv} ❌{n_pv} | Banco ✅{n_cb} ❌{n_pb}")
+            ui["cb_prog"](100)
+            ui["habilitar_fechar"](f"\n{msg}")
+        except Exception as exc:
+            import traceback
+            ui["habilitar_fechar_erro"](f"❌ Erro ao exportar: {exc}\n{traceback.format_exc()}")
+            self._set_btns_estado(True)
 
     def conciliar_manual(self):
         if not self.sel_vendas or not self.sel_bancos:
@@ -918,6 +1551,7 @@ class ConciliacaoApp(tk.Toplevel):
             vals = (
                 row.get("origem",     ""),
                 row.get("referencia", ""),
+                row.get("data",       ""),
                 row.get("tipo",       ""),
                 f"{row['valor']:,.2f}",
                 f"{row['saldo_rest']:,.2f}",
@@ -964,6 +1598,7 @@ class ConciliacaoApp(tk.Toplevel):
         ft = self.filtro_tipo.get()
         if ft != "Todos" and "tipo" in df.columns:
             df = df[df["tipo"] == ft]
+        df = self._filtrar_data(df, "data")
         return df
 
     def _filtrar_b(self, df):
@@ -971,6 +1606,7 @@ class ConciliacaoApp(tk.Toplevel):
         ft = self.filtro_tipo.get()
         if ft != "Todos" and "TIPO" in df.columns:
             df = df[df["TIPO"] == ft]
+        df = self._filtrar_data(df, "DT_VENDA")
         return df
 
     def _filtrar(self, df, col_status):
@@ -978,6 +1614,47 @@ class ConciliacaoApp(tk.Toplevel):
         if f == "Todos":
             return df
         return df[df[col_status] == f]
+
+    def _filtrar_data(self, df, col):
+        """Filtra por intervalo de data. Espera formato dd/mm/aaaa nas entries."""
+        if col not in df.columns:
+            return df
+        ini_txt = self.filtro_data_ini.get().strip()
+        fim_txt = self.filtro_data_fim.get().strip()
+        if not ini_txt and not fim_txt:
+            return df
+
+        def para_data(txt):
+            for fmt in ("%d/%m/%Y", "%d/%m/%y"):
+                try:
+                    return datetime.strptime(txt, fmt).date()
+                except ValueError:
+                    pass
+            return None
+
+        ini = para_data(ini_txt) if ini_txt else None
+        fim = para_data(fim_txt) if fim_txt else None
+
+        def data_linha(v):
+            v = str(v).strip()
+            for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"):
+                try:
+                    return datetime.strptime(v, fmt).date()
+                except ValueError:
+                    pass
+            return None
+
+        mask = pd.Series([True] * len(df), index=df.index)
+        if ini:
+            mask &= df[col].apply(lambda v: (data_linha(v) or datetime.min.date()) >= ini)
+        if fim:
+            mask &= df[col].apply(lambda v: (data_linha(v) or datetime.max.date()) <= fim)
+        return df[mask]
+
+    def _limpar_filtro_data(self):
+        self.filtro_data_ini.delete(0, "end")
+        self.filtro_data_fim.delete(0, "end")
+        self.atualizar_tabelas()
 
     def atualizar_resumo(self):
         if self.df_vendas is not None:
@@ -1002,6 +1679,236 @@ class ConciliacaoApp(tk.Toplevel):
                 cor    = COR_VERDE if abs(dif) < 0.05 else COR_VERMELHO
                 self.lbl_res["diferenca"].config(
                     text=f"R$ {dif:,.2f}", fg=cor)
+
+    def exportar_xlsx(self):
+        if self.df_vendas is None and self.df_banco is None:
+            messagebox.showwarning("Aviso", "Nenhum dado carregado para exportar.")
+            return
+        path_out = filedialog.asksaveasfilename(
+            title="Salvar relatório de conciliação",
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx"), ("Todos", "*.*")],
+            initialfile="conciliacao_cartao.xlsx")
+        if not path_out:
+            return
+        self._exportar_para(path_out)
+
+    def _exportar_para(self, path_out, df_vendas=None, df_banco=None, silencioso=False):
+        """Exporta o relatório XLSX para path_out sem abrir filedialog.
+        Se df_vendas/df_banco forem None, usa self.df_vendas/self.df_banco."""
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        if df_vendas is None:
+            df_vendas = self.df_vendas
+        if df_banco is None:
+            df_banco = self.df_banco
+
+        try:
+            wb = Workbook()
+            borda = Border(
+                left=Side(style="thin"), right=Side(style="thin"),
+                top=Side(style="thin"), bottom=Side(style="thin"))
+
+            def hdr_style(cell, cor_hex="1E3A5F"):
+                cell.font      = Font(bold=True, color="FFFFFF", size=9)
+                cell.fill      = PatternFill("solid", fgColor=cor_hex)
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                cell.border    = borda
+
+            def val_cell(cell, bold=False):
+                cell.font      = Font(bold=bold, size=9)
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                cell.border    = borda
+
+            def sub_hdr(cell):
+                cell.font      = Font(size=9)
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+                cell.border    = borda
+
+            # ── Aba Resumo ────────────────────────────────────────────────────
+            ws_res = wb.active
+            ws_res.title = "Resumo"
+            ws_res.merge_cells("A1:B1")
+            ws_res["A1"] = "RELATÓRIO DE CONCILIAÇÃO — CARTÕES"
+            ws_res["A1"].font      = Font(bold=True, size=12, color="FFFFFF")
+            ws_res["A1"].fill      = PatternFill("solid", fgColor="1E3A5F")
+            ws_res["A1"].alignment = Alignment(horizontal="center")
+            ws_res.merge_cells("A2:B2")
+            ws_res["A2"] = f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+            ws_res["A2"].font      = Font(italic=True, size=9)
+            ws_res["A2"].alignment = Alignment(horizontal="center")
+
+            row = 4
+
+            # Bloco Vendas
+            ws_res.cell(row, 1, "VENDAS CARTÃO (PDFs)")
+            hdr_style(ws_res.cell(row, 1))
+            ws_res.merge_cells(f"A{row}:B{row}")
+            row += 1
+
+            if df_vendas is not None:
+                dv = df_vendas
+                cnt_v = dv["status"].value_counts()
+                soma_v = dv["valor"].sum()
+                soma_conc_v = dv.loc[dv["status"] == "conciliado", "valor"].sum()
+                soma_pend_v = dv.loc[dv["status"] == "pendente",   "valor"].sum()
+                soma_parc_v = dv.loc[dv["status"] == "parcial",    "valor"].sum()
+                soma_ign_v  = dv.loc[dv["status"] == "ignorado",   "valor"].sum()
+                items_v = [
+                    ("Total de registros",  len(dv),                        False),
+                    ("✅ Conciliados",       cnt_v.get("conciliado", 0),     False),
+                    ("⚠ Parciais",          cnt_v.get("parcial",    0),     False),
+                    ("❌ Pendentes",         cnt_v.get("pendente",   0),     False),
+                    ("🚫 Ignorados",         cnt_v.get("ignorado",   0),     False),
+                    ("Σ Valor Total Vendas", f"R$ {soma_v:,.2f}",           True),
+                    ("Σ Valor Conciliado",   f"R$ {soma_conc_v:,.2f}",      False),
+                    ("Σ Valor Pendente",     f"R$ {soma_pend_v:,.2f}",      False),
+                    ("Σ Valor Parcial",      f"R$ {soma_parc_v:,.2f}",      False),
+                    ("Σ Valor Ignorado",     f"R$ {soma_ign_v:,.2f}",       False),
+                    ("% Conciliado",         f"{100*soma_conc_v/soma_v:.1f}%" if soma_v else "—", False),
+                ]
+            else:
+                items_v = [("(sem dados)", "—", False)]
+                soma_v = 0
+
+            for label, valor, bold in items_v:
+                c1 = ws_res.cell(row, 1, label); c2 = ws_res.cell(row, 2, valor)
+                sub_hdr(c1); val_cell(c2, bold)
+                row += 1
+
+            row += 1
+
+            # Bloco Banco
+            ws_res.cell(row, 1, "EXTRATO CARTÕES — BANCO")
+            hdr_style(ws_res.cell(row, 1), cor_hex="4A235A")
+            ws_res.merge_cells(f"A{row}:B{row}")
+            row += 1
+
+            if df_banco is not None:
+                db = df_banco
+                cnt_b = db["status"].value_counts()
+                soma_b = db["VALOR"].sum()
+                soma_conc_b = db.loc[db["status"] == "conciliado", "VALOR"].sum()
+                soma_pend_b = db.loc[db["status"] == "pendente",   "VALOR"].sum()
+                items_b = [
+                    ("Total de registros",  len(db),                        False),
+                    ("✅ Conciliados",       cnt_b.get("conciliado", 0),     False),
+                    ("❌ Pendentes",         cnt_b.get("pendente",   0),     False),
+                    ("Σ Valor Total Banco",  f"R$ {soma_b:,.2f}",           True),
+                    ("Σ Valor Conciliado",   f"R$ {soma_conc_b:,.2f}",      False),
+                    ("Σ Valor Pendente",     f"R$ {soma_pend_b:,.2f}",      False),
+                    ("% Conciliado",         f"{100*soma_conc_b/soma_b:.1f}%" if soma_b else "—", False),
+                ]
+            else:
+                items_b = [("(sem dados)", "—", False)]
+                soma_b = 0
+
+            for label, valor, bold in items_b:
+                c1 = ws_res.cell(row, 1, label); c2 = ws_res.cell(row, 2, valor)
+                sub_hdr(c1); val_cell(c2, bold)
+                row += 1
+
+            row += 1
+
+            # Bloco Diferença
+            if df_vendas is not None and df_banco is not None:
+                ws_res.cell(row, 1, "DIFERENÇA")
+                hdr_style(ws_res.cell(row, 1), cor_hex="1D6A3A")
+                ws_res.merge_cells(f"A{row}:B{row}")
+                row += 1
+                dif = soma_v - soma_b
+                cor_dif = "1D6A3A" if abs(dif) < 0.05 else "C0392B"
+                c1 = ws_res.cell(row, 1, "Δ Vendas − Banco")
+                c2 = ws_res.cell(row, 2, f"R$ {dif:,.2f}")
+                sub_hdr(c1)
+                c2.font      = Font(bold=True, color=cor_dif)
+                c2.alignment = Alignment(horizontal="right")
+                c2.border    = borda
+
+            ws_res.column_dimensions["A"].width = 32
+            ws_res.column_dimensions["B"].width = 22
+
+            # ── Aba Vendas ────────────────────────────────────────────────────
+            if df_vendas is not None:
+                ws_v = wb.create_sheet("Vendas")
+                cols_exp = ["origem", "referencia", "data", "tipo", "valor",
+                            "saldo_rest", "descricao", "status", "par_banco"]
+                for ci, col in enumerate(cols_exp, 1):
+                    hdr_style(ws_v.cell(1, ci, col.upper()))
+                for ri, (_, r) in enumerate(df_vendas.iterrows(), 2):
+                    for ci, col in enumerate(cols_exp, 1):
+                        ws_v.cell(ri, ci, r.get(col, ""))
+                largs = {"descricao": 50, "referencia": 16, "origem": 14,
+                         "data": 12, "tipo": 12, "valor": 12,
+                         "saldo_rest": 12, "status": 12, "par_banco": 14}
+                for ci, col in enumerate(cols_exp, 1):
+                    ws_v.column_dimensions[get_column_letter(ci)].width = largs.get(col, 14)
+
+            # ── Aba Banco ─────────────────────────────────────────────────────
+            if df_banco is not None:
+                ws_b = wb.create_sheet("Banco")
+                cols_b = ["DT_VENDA", "HR_VENDA", "CARTAO", "TIPO", "AUTHO",
+                          "CV", "TERMINAL", "PARCELAS", "VALOR",
+                          "saldo_rest", "status", "par_venda"]
+                for ci, col in enumerate(cols_b, 1):
+                    hdr_style(ws_b.cell(1, ci, col.upper()), cor_hex="4A235A")
+                for ri, (_, r) in enumerate(df_banco.iterrows(), 2):
+                    for ci, col in enumerate(cols_b, 1):
+                        ws_b.cell(ri, ci, r.get(col, ""))
+                for ci, col in enumerate(cols_b, 1):
+                    ws_b.column_dimensions[get_column_letter(ci)].width = (
+                        30 if col == "CARTAO" else 14)
+
+            # ── Aba Pendentes ─────────────────────────────────────────────────
+            ws_p = wb.create_sheet("Pendentes")
+            ws_p["A1"] = "VENDAS PENDENTES"
+            hdr_style(ws_p["A1"])
+            ws_p.merge_cells("A1:I1")
+            row_p = 2
+            cols_pv = ["origem", "referencia", "data", "tipo", "valor",
+                       "saldo_rest", "descricao", "status", "par_banco"]
+            for ci, col in enumerate(cols_pv, 1):
+                hdr_style(ws_p.cell(row_p, ci, col.upper()))
+            row_p += 1
+            if df_vendas is not None:
+                for _, r in df_vendas[df_vendas["status"] == "pendente"].iterrows():
+                    for ci, col in enumerate(cols_pv, 1):
+                        ws_p.cell(row_p, ci, r.get(col, ""))
+                    row_p += 1
+
+            row_p += 1
+            ws_p.cell(row_p, 1, "BANCO PENDENTES")
+            hdr_style(ws_p.cell(row_p, 1), cor_hex="4A235A")
+            ws_p.merge_cells(f"A{row_p}:L{row_p}")
+            row_p += 1
+            cols_pb = ["DT_VENDA", "HR_VENDA", "CARTAO", "TIPO", "AUTHO",
+                       "CV", "TERMINAL", "PARCELAS", "VALOR", "saldo_rest",
+                       "status", "par_venda"]
+            for ci, col in enumerate(cols_pb, 1):
+                hdr_style(ws_p.cell(row_p, ci, col.upper()), cor_hex="4A235A")
+            row_p += 1
+            if df_banco is not None:
+                for _, r in df_banco[df_banco["status"] == "pendente"].iterrows():
+                    for ci, col in enumerate(cols_pb, 1):
+                        ws_p.cell(row_p, ci, r.get(col, ""))
+                    row_p += 1
+
+            for ci in range(1, 13):
+                ws_p.column_dimensions[get_column_letter(ci)].width = 16
+            ws_p.column_dimensions["G"].width = 40
+
+            wb.save(path_out)
+            self.status_var.set(f"✅ Exportado: {os.path.basename(path_out)}")
+            if not silencioso:
+                messagebox.showinfo("Exportação concluída",
+                    f"Relatório salvo com sucesso!\n\n{path_out}")
+
+        except Exception as e:
+            import traceback
+            messagebox.showerror("Erro na exportação",
+                f"{e}\n\n{traceback.format_exc()}")
 
     def _item_id(self, tree, item):
         if tree == self.tree_v:
