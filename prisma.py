@@ -17,7 +17,7 @@ import json
 from controle import ARQUIVO_PERFIS, MESES_PTBR, normalizar_loja_valor
 from conciliador import ConciliacaoApp
 from conciliador_pix_qrcode import ConciliacaoPixApp
-from conciliador_pix_maquineta import ConciliacaoPixMaquinetaApp
+from conciliador_pix_maquineta import Conciliacao_PixMaquineta
 import shutil
 from supabase_config import supabase
 from datetime import datetime
@@ -5012,7 +5012,7 @@ def abrir_submenu_conciliacao():
     # Botões do submenu (abrem Toplevels existentes)
     make_btn("Conciliador de Cartões", lambda: ConciliacaoApp(master=root))
     make_btn("Conciliador Pix QrCode", lambda: ConciliacaoPixApp(master=root))
-    make_btn("Conciliador Pix Maquineta", lambda: ConciliacaoPixMaquinetaApp(master=root))
+    make_btn("Conciliador Pix Maquineta", lambda: Conciliacao_PixMaquineta(master=root))
 
     # Voltar ao menu principal (só troca o content area)
     btn_voltar = tk.Button(frame, text="Voltar",

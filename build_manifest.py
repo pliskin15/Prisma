@@ -6,7 +6,7 @@ from datetime import datetime
 # === CONFIGURÁVEIS ===
 BUILD_DIR = Path("dist/Prisma")           # saída do PyInstaller (onedir)
 EXTRA_DIR = Path("extra_files")           # arquivos adicionais: .env, version.txt, updater_config.json etc.
-NEW_VERSION = "4.0.8." \
+NEW_VERSION = "4.0.8.1y" \
 ""                     # versão a publicar
 GITHUB_USER = "pliskin15"
 GITHUB_REPO = "Prisma"

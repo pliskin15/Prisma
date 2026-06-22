@@ -1,9 +1,3 @@
-"""
-Conciliador PIX MAQUINETA — PMZ Peças e Pneus
-Relaciona vendas PIX Maquineta (Cupom Fiscal, Nota Fiscal, Recibos)
-com o extrato de Movimentação PIX Maquineta (XLSX Getnet/Santander).
-"""
-
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import pandas as pd
@@ -213,7 +207,7 @@ def ler_nota_fiscal(path):
 def ler_recibos(path):
     """
     Lê o Relatório de Recibos (PDF).
-    Captura apenas recibos com "DEP. GETNET PIX" (exclui DEP. PIX QRCOD).
+    Captura recibos com "DEP. PIX MAQUINETA" ou "SAFRAPAY PIX" (variações aceitas).
 
     Layout de cada recibo:
       Linha cabeçalho:  41  41043849  3  41002201  NOME CLIENTE  DEP. GETNET PIX  TOTAL :  137,67
@@ -223,7 +217,16 @@ def ler_recibos(path):
       [0]DPP [1]DOC [2]SERIE [3]RECEBIDO [4]V.DOC [5]JR.DOC [6]JR.CART
       [7]DESPESAS [8]DINH. [9]CHEQUE [10]CART.DEB [11]CART.CRED [12]DEPOSITO
       [13]ANTECIPADO [14]DEVCAR
+
+    SafraPay PIX:
+      O índice da coluna DEPOSITO na linha DPP pode variar.
+      Caso o SafraPay use um layout diferente de colunas, ajuste
+      INDICE_DEPOSITO_SAFRAPAY abaixo conforme o PDF real.
     """
+    # ── Índice da coluna DEPOSITO na linha DPP por tipo de recibo ────────────
+    INDICE_DEPOSITO_GETNET   = 9   # layout DEP. PIX MAQUINETA (Getnet)
+    INDICE_DEPOSITO_SAFRAPAY = 9   # ajuste se o PDF SafraPay tiver layout diferente
+
     linhas = _extrair_linhas_pdf(path)
 
     registros    = []
@@ -251,28 +254,44 @@ def ler_recibos(path):
                 registros.append(recibo_atual)
             recibo_atual = None
 
-            # Só captura recibos DEP. GETNET PIX
-            if "DEP. PIX MAQUINETA" in up:
-                partes = linha_limpa.split()
-                numero_recibo = partes[1]
+            partes = linha_limpa.split()
+            numero_recibo = partes[1]
 
+            # ── Getnet / PIX Maquineta ────────────────────────────────────────
+            if "DEP. PIX MAQUINETA" in up:
                 recibo_atual = {
-                    "origem":     "Recibo",
-                    "referencia": f"Recibo {numero_recibo}",
-                    "data":       data_atual,
-                    "valor":      0.0,
-                    "descricao":  f"DEP. GETNET PIX | Recibo {numero_recibo}",
-                    "status":     "pendente",
-                    "par_banco":  "",
+                    "origem":           "Recibo",
+                    "referencia":       f"Recibo {numero_recibo}",
+                    "data":             data_atual,
+                    "valor":            0.0,
+                    "descricao":        f"DEP. PIX MAQUINETA | Recibo {numero_recibo}",
+                    "status":           "pendente",
+                    "par_banco":        "",
+                    "_indice_deposito": INDICE_DEPOSITO_GETNET,
+                }
+
+            # ── SafraPay PIX ─────────────────────────────────────────────────
+            # Aceita: "SAFRAPAY PIX", "DEP. SAFRAPAY PIX", "SAFRA PIX",
+            #         "DEP. SAFRA PIX", "SAFRA PAY PIX" (case-insensitive)
+            elif re.search(r"SAFRA\s*PAY\s*PIX|SAFRA\s*PIX", up):
+                recibo_atual = {
+                    "origem":           "Recibo",
+                    "referencia":       f"Recibo {numero_recibo}",
+                    "data":             data_atual,
+                    "valor":            0.0,
+                    "descricao":        f"SAFRAPAY PIX | Recibo {numero_recibo}",
+                    "status":           "pendente",
+                    "par_banco":        "",
+                    "_indice_deposito": INDICE_DEPOSITO_SAFRAPAY,
                 }
             continue
 
-        # ── Linhas DPP: soma coluna DEPOSITO (índice 9 dos valores com vírgula) ─
+        # ── Linhas DPP/ANT: soma coluna DEPOSITO ─────────────────────────────
         if recibo_atual and (up.startswith("DPP") or up.startswith("ANT")):
             nums = re.findall(r"\d{1,3}(?:\.\d{3})*,\d{2}", linha_limpa)
-            INDICE_DEPOSITO = 9
-            if len(nums) > INDICE_DEPOSITO:
-                deposito = _num(nums[INDICE_DEPOSITO])
+            idx_dep = recibo_atual.get("_indice_deposito", INDICE_DEPOSITO_GETNET)
+            if len(nums) > idx_dep:
+                deposito = _num(nums[idx_dep])
                 recibo_atual["valor"] = round(recibo_atual["valor"] + deposito, 2)
 
     # Adiciona último recibo
@@ -281,6 +300,8 @@ def ler_recibos(path):
 
     df = pd.DataFrame(registros)
     if not df.empty:
+        # Remove coluna auxiliar interna antes de retornar
+        df = df.drop(columns=["_indice_deposito"], errors="ignore")
         df["saldo_rest"] = df["valor"]
     return df
 
@@ -362,6 +383,112 @@ def ler_mov_pix(path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PARSER: RAZÃO CONTÁBIL (XLS) — filtra CONTA PARTIDA XX-2074
+# ─────────────────────────────────────────────────────────────────────────────
+
+def ler_razao(path):
+    """
+    Lê o Razão Modelo I (XLS) e extrai todos os lançamentos cuja
+    CONTA PARTIDA termina em 2074 (PIX Maquineta na contabilidade).
+
+    Estrutura do arquivo:
+      Linha PERIODO: informa o período e a conta contábil analisada
+      Linha DATA:    cabeçalho das colunas de detalhe
+      Linhas de lançamento: DATA | SEQUENCIA | LOTE | VOUCHER | DOC.NRO |
+                             HISTORICO | CENTRO DE CUSTO | CONTA PARTIDA |
+                             DEBITO | CREDITO
+      Linha TOTAL ANTERIOR: rodapé da conta (ignorar)
+
+    Regra de captura:
+    - CONTA PARTIDA contém "2074"
+    - Valor usado é sempre CREDITO (col 9); DEBITO é 0 nestes lançamentos
+    - Data é formatada como dd/MM para o período em curso → completamos
+      com o ano do cabeçalho PERIODO.
+    """
+    try:
+        df_raw = pd.read_excel(path, engine="xlrd", header=None)
+    except Exception:
+        # tenta openpyxl como fallback (xlsx renomeado)
+        df_raw = pd.read_excel(path, header=None)
+
+    registros = []
+    ano_atual = ""
+    conta_atual = ""
+
+    for i, row in df_raw.iterrows():
+        r = [str(v).strip() if v is not None else "" for v in row]
+
+        # ── Cabeçalho de período/conta ────────────────────────────────────────
+        # Linha: ['PERIODO ', 'dd/mm/aaaa - dd/mm/aaaa', ..., 'CONTA ', 'NNN - DESCRICAO', ...]
+        if str(r[0]).upper().startswith("PERIODO"):
+            periodo = r[1]
+            m_ano = re.search(r"(\d{4})", periodo)
+            if m_ano:
+                ano_atual = m_ano.group(1)
+            conta_atual = r[7] if len(r) > 7 else ""
+            continue
+
+        # ── Linha de lançamento com CONTA PARTIDA *-2074 ─────────────────────
+        col_cp = r[7]   # CONTA PARTIDA
+        if "2074" not in col_cp:
+            continue
+
+        # Deve ser linha de detalhe: col 0 é data no formato "dd/MM"
+        data_str = r[0]
+        m_data = re.match(r"^(\d{1,2})/(\d{2})$", data_str)
+        if not m_data:
+            continue
+
+        dia = m_data.group(1).zfill(2)
+        mes = m_data.group(2)
+        data_completa = f"{dia}/{mes}/{ano_atual}" if ano_atual else data_str
+
+        # Valores
+        try:
+            credito = float(str(r[9]).replace(",", ".")) if r[9] not in ("", "nan") else 0.0
+        except ValueError:
+            credito = 0.0
+        try:
+            debito = float(str(r[8]).replace(",", ".")) if r[8] not in ("", "nan") else 0.0
+        except ValueError:
+            debito = 0.0
+
+        valor = credito if credito > 0 else debito
+        if valor <= 0:
+            continue
+
+        voucher  = r[3]
+        doc_nro  = r[4]
+        hist     = r[5]
+        seq      = r[1]
+
+        registros.append({
+            "origem":         "Razão",
+            "referencia":     f"Voucher {voucher} / Doc {doc_nro}",
+            "data":           data_completa,
+            "valor":          round(valor, 2),
+            "descricao":      (f"PIX MAQUINETA (2074) | {conta_atual} | "
+                               f"{hist} | Seq {seq} | Doc {doc_nro}"),
+            "conta_partida":  col_cp,
+            "voucher":        voucher,
+            "doc_nro":        doc_nro,
+            "status":         "pendente",
+            "par_banco":      "",
+        })
+
+    COLS = ["origem", "referencia", "data", "valor", "descricao",
+            "conta_partida", "voucher", "doc_nro", "status", "par_banco"]
+    if not registros:
+        df = pd.DataFrame(columns=COLS)
+        df["valor"] = pd.Series(dtype=float)
+    else:
+        df = pd.DataFrame(registros, columns=COLS)
+
+    df["saldo_rest"] = df["valor"]
+    return df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CONCILIAÇÃO AUTOMÁTICA
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -369,13 +496,27 @@ def conciliar_automatico(df_vendas, df_banco, tolerancia=0.01):
     dv = df_vendas.copy()
     db = df_banco.copy()
 
-    dv["status"]    = "pendente"
-    dv["par_banco"] = ""
-    dv["saldo_rest"] = dv["valor"]
+    # Só inicializa do zero se as colunas ainda não existem — caso já tenha
+    # rodado conciliar_razao_por_dia (ou esta própria função) antes, preserva
+    # o saldo_rest/status/par_* já conciliado, em vez de resetar tudo e
+    # reabrir pendências que já foram fechadas.
+    if "saldo_rest" not in dv.columns:
+        dv["status"]     = "pendente"
+        dv["par_banco"]  = ""
+        dv["saldo_rest"] = dv["valor"]
+    else:
+        dv["status"]    = dv.get("status", "pendente").fillna("pendente")
+        dv["par_banco"] = dv.get("par_banco", "").fillna("")
+        dv["saldo_rest"] = dv["saldo_rest"].fillna(dv["valor"])
 
-    db["status"]    = "pendente"
-    db["par_venda"] = ""
-    db["saldo_rest"] = db["VALOR"]
+    if "saldo_rest" not in db.columns:
+        db["status"]     = "pendente"
+        db["par_venda"]  = ""
+        db["saldo_rest"] = db["VALOR"]
+    else:
+        db["status"]    = db.get("status", "pendente").fillna("pendente")
+        db["par_venda"] = db.get("par_venda", "").fillna("")
+        db["saldo_rest"] = db["saldo_rest"].fillna(db["VALOR"])
 
     par_counter = [0]
 
@@ -422,10 +563,202 @@ def conciliar_automatico(df_vendas, df_banco, tolerancia=0.01):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CONCILIAÇÃO RAZÃO × BANCO — por agrupamento de dia
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _normalizar_data(val):
+    """Converte várias representações de data para objeto date, ou None."""
+    import datetime as _datetime_mod
+    # Já é date ou datetime
+    if isinstance(val, _datetime_mod.datetime):
+        return val.date()
+    if isinstance(val, _datetime_mod.date):
+        return val
+    # Pandas Timestamp
+    try:
+        import pandas as _pd
+        if isinstance(val, _pd.Timestamp):
+            return val.date()
+    except Exception:
+        pass
+    s = str(val).strip()
+    # Remove parte de hora se presente: "2026-06-05 00:00:00" -> "2026-06-05"
+    s = s.split(" ")[0].split("T")[0]
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m"):
+        try:
+            return _datetime_mod.datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+    return None
+
+
+def _subset_sum(values_list, alvo, tolerancia=0.01):
+    """
+    Encontra um subconjunto de values_list (lista de (idx, valor)) cuja
+    soma é igual a alvo (± tolerância).
+
+    Estratégia em 3 camadas:
+      1. Soma total == alvo → retorna tudo (caso mais comum no razão).
+      2. Busca exata por subset-sum com limite de 2^20 combinações.
+      3. Fallback: retorna tudo disponível para conciliação parcial.
+
+    Retorna (escolhidos: list[(idx, valor)], acumulado: float, exato: bool)
+    """
+    from itertools import combinations
+
+    soma_total = round(sum(v for _, v in values_list), 2)
+
+    # Caso 1: soma total já é o alvo
+    if abs(soma_total - alvo) <= tolerancia:
+        return values_list, soma_total, True
+
+    # Caso 2: subset-sum exato (só tenta se n pequeno o suficiente)
+    n = len(values_list)
+    if n <= 20:
+        for r in range(1, n + 1):
+            for combo in combinations(range(n), r):
+                s = round(sum(values_list[i][1] for i in combo), 2)
+                if abs(s - alvo) <= tolerancia:
+                    escolhidos = [values_list[i] for i in combo]
+                    return escolhidos, s, True
+
+    # Caso 3: fallback parcial — retorna tudo disponível
+    return values_list, soma_total, False
+
+
+def conciliar_razao_por_dia(df_vendas, df_banco, tolerancia=0.01):
+    """
+    Conciliação especial para lançamentos do Razão (origem == 'Razão').
+
+    Cada linha do razão é um LOTE diário — a soma de N transações
+    individuais do banco naquele mesmo dia.
+
+    Algoritmo por dia:
+      Para cada data com lotes do razão pendentes:
+        1. Coleta todos os lotes do dia e todas as transações do banco do dia.
+        2. Para cada lote (ordenado do maior para o menor) chama _subset_sum
+           para encontrar o subconjunto exato de transações que fecha o lote.
+        3. As transações usadas são marcadas e removidas do pool do dia.
+        4. Se não achar subconjunto exato mas a soma total do pool cobrir
+           o lote, faz conciliação parcial.
+    """
+    dv = df_vendas.copy()
+    db = df_banco.copy()
+
+    par_counter = [0]
+
+    def novo_par(prefixo="R"):
+        par_counter[0] += 1
+        return f"{prefixo}{par_counter[0]:04d}"
+
+    def _ap(df, idx, col, p):
+        a = str(df.at[idx, col])
+        df.at[idx, col] = f"{a},{p}" if a and a != "nan" else p
+
+    # Normalizar datas
+    db["_data_norm"] = db["DT_RECEB"].apply(_normalizar_data)
+    dv["_data_norm"] = dv["data"].apply(_normalizar_data)
+
+    # Agrupa por data para processar todos os lotes do dia de uma vez
+    datas_razao = (
+        dv[(dv["origem"] == "Razão") & (dv["saldo_rest"] > tolerancia)]
+        ["_data_norm"]
+        .dropna()
+        .unique()
+    )
+
+    for data_alvo in sorted(datas_razao):
+        # Lotes do razão neste dia, do maior para o menor
+        lotes_idx = dv[
+            (dv["origem"] == "Razão") &
+            (dv["_data_norm"] == data_alvo) &
+            (dv["saldo_rest"] > tolerancia)
+        ].sort_values("saldo_rest", ascending=False).index
+
+        # Pool de transações do banco disponíveis neste dia
+        pool_idx = list(
+            db[
+                (db["_data_norm"] == data_alvo) &
+                (db["saldo_rest"] > tolerancia)
+            ].index
+        )
+
+        for iv in lotes_idx:
+            alvo = round(dv.at[iv, "saldo_rest"], 2)
+
+            if not pool_idx:
+                break
+
+            # Monta lista (idx, saldo_rest) do pool atual
+            pool = [(ib, round(db.at[ib, "saldo_rest"], 2)) for ib in pool_idx]
+
+            escolhidos, acumulado, exato = _subset_sum(pool, alvo, tolerancia)
+
+            # Só processa se cobriu pelo menos 95% do lote
+            if acumulado < alvo * 0.95 - tolerancia:
+                continue
+
+            # Nunca consumir do pool mais do que o lote precisa: se o pool
+            # somado excede o alvo (acumulado > alvo), descontamos de cada
+            # transação do banco apenas a parte proporcional ao lote, e a
+            # sobra fica disponível para outros lotes do mesmo dia.
+            excesso = round(acumulado - alvo, 2)
+            acumulado_aplicado = min(acumulado, alvo)
+
+            par = novo_par("R")
+
+            if excesso > tolerancia and acumulado > 0:
+                restante_excesso = excesso
+                for k, (ib, contrib) in enumerate(escolhidos):
+                    sb = db.at[ib, "saldo_rest"]
+                    if k < len(escolhidos) - 1:
+                        parte_excesso = round(excesso * (contrib / acumulado), 2)
+                    else:
+                        # último item absorve o resto do excesso (evita erro de arredondamento)
+                        parte_excesso = restante_excesso
+                    parte_excesso = min(parte_excesso, contrib)
+                    restante_excesso = round(restante_excesso - parte_excesso, 2)
+
+                    debito = round(contrib - parte_excesso, 2)
+                    db.at[ib, "saldo_rest"] = round(sb - debito, 2)
+                    _ap(db, ib, "par_venda", par)
+                    db.at[ib, "status"] = (
+                        "conciliado" if db.at[ib, "saldo_rest"] <= tolerancia
+                        else "parcial"
+                    )
+                    if db.at[ib, "saldo_rest"] <= tolerancia:
+                        pool_idx.remove(ib)
+            else:
+                for ib, contrib in escolhidos:
+                    sb = db.at[ib, "saldo_rest"]
+                    db.at[ib, "saldo_rest"] = round(sb - contrib, 2)
+                    _ap(db, ib, "par_venda", par)
+                    db.at[ib, "status"] = (
+                        "conciliado" if db.at[ib, "saldo_rest"] <= tolerancia
+                        else "parcial"
+                    )
+                    # Remove do pool se esgotado
+                    if db.at[ib, "saldo_rest"] <= tolerancia:
+                        pool_idx.remove(ib)
+
+            sv = dv.at[iv, "saldo_rest"]
+            dv.at[iv, "saldo_rest"] = round(sv - acumulado_aplicado, 2)
+            _ap(dv, iv, "par_banco", par)
+            dv.at[iv, "status"] = (
+                "conciliado" if dv.at[iv, "saldo_rest"] <= tolerancia
+                else "parcial"
+            )
+
+    db.drop(columns=["_data_norm"], inplace=True, errors="ignore")
+    dv.drop(columns=["_data_norm"], inplace=True, errors="ignore")
+    return dv, db
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # INTERFACE
 # ─────────────────────────────────────────────────────────────────────────────
 
-class ConciliacaoPixMaquinetaApp(tk.Toplevel):
+class Conciliacao_PixMaquineta(tk.Toplevel):
     def __init__(self, master=None):
         super().__init__()
         self.title("Conciliador PIX MAQUINETA — PMZ Peças e Pneus")
@@ -435,7 +768,7 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
         self.grab_set()   
         self.df_vendas = None
         self.df_banco  = None
-        self.paths     = {"cupom": None, "nf": None, "recibo": None, "banco": None}
+        self.paths     = {"cupom": None, "nf": None, "recibo": None, "banco": None, "razao": None}
 
         self.sel_vendas = []
         self.sel_bancos = []
@@ -464,10 +797,11 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
                  font=("Segoe UI", 13, "bold")).pack(side="left", padx=16, pady=12)
 
         btns = [
-            ("🔄  Conciliar Auto",   COR_AZUL,    self.conciliar_auto),
-            ("🤝  Conciliar Manual", COR_VERDE,   self.conciliar_manual),
-            ("🔓  Desconciliar",     COR_AMARELO, self.desconciliar),
-            ("🚫  Ignorar",          COR_CINZA,   self.ignorar),
+            ("🔄  Conciliar Auto",    COR_AZUL,    self.conciliar_auto),
+            ("📅  Conciliar Razão",   COR_ACENTO,  self.conciliar_razao_dia),
+            ("🤝  Conciliar Manual",  COR_VERDE,   self.conciliar_manual),
+            ("🔓  Desconciliar",      COR_AMARELO, self.desconciliar),
+            ("🚫  Ignorar",           COR_CINZA,   self.ignorar),
         ]
         for txt, cor, cmd in btns:
             tk.Button(bar, text=txt, bg=cor, fg="white",
@@ -560,6 +894,7 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
             ("cupom",  "📄 Cupom Fiscal",    self.carregar_cupom),
             ("nf",     "🧾 Nota Fiscal",     self.carregar_nf),
             ("recibo", "📋 Recibos",         self.carregar_recibo),
+            ("razao",  "📒 Razão Contábil",  self.carregar_razao),
             ("banco",  "🏦 PIX Maquineta",   self.carregar_banco),
         ]
         for chave, label, cmd in arquivos:
@@ -650,7 +985,7 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
         frame.pack(side="left", fill="both", expand=True, pady=10)
 
         # ── Tabela superior: Vendas ───────────────────────────────────────────
-        tk.Label(frame, text="VENDAS PIX MAQUINETA  (Cupom Fiscal + Nota Fiscal + Recibos)",
+        tk.Label(frame, text="VENDAS PIX MAQUINETA  (Cupom Fiscal + Nota Fiscal + Recibos + Razão)",
                  bg=COR_BG, fg=COR_ACENTO,
                  font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 2))
 
@@ -764,16 +1099,36 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
 
     def _unificar_vendas(self):
         partes = []
-        for chave in ("cupom", "nf", "recibo"):
+        for chave in ("cupom", "nf", "recibo", "razao"):
             df = getattr(self, f"_df_{chave}", None)
             if df is not None:
                 partes.append(df)
         if not partes:
             return None
         df = pd.concat(partes, ignore_index=True)
-        df["status"]     = "pendente"
-        df["par_banco"]  = ""
-        df["saldo_rest"] = df["valor"]
+        # Só reseta status/par_banco/saldo_rest se ainda não havia df_vendas
+        # (preserva conciliações já feitas ao recarregar apenas um arquivo)
+        if self.df_vendas is not None and len(self.df_vendas) > 0:
+            # Tenta restaurar status anterior por referencia+valor
+            idx_map = {}
+            for _, row in self.df_vendas.iterrows():
+                chave_r = (str(row.get("referencia","")), round(float(row.get("valor",0)),2))
+                idx_map[chave_r] = row
+            for i, row in df.iterrows():
+                chave_r = (str(row.get("referencia","")), round(float(row.get("valor",0)),2))
+                if chave_r in idx_map:
+                    prev = idx_map[chave_r]
+                    df.at[i, "status"]     = prev.get("status", "pendente")
+                    df.at[i, "par_banco"]  = prev.get("par_banco", "")
+                    df.at[i, "saldo_rest"] = prev.get("saldo_rest", row["valor"])
+                else:
+                    df.at[i, "status"]     = "pendente"
+                    df.at[i, "par_banco"]  = ""
+                    df.at[i, "saldo_rest"] = row["valor"]
+        else:
+            df["status"]     = "pendente"
+            df["par_banco"]  = ""
+            df["saldo_rest"] = df["valor"]
         return df
 
     def carregar_cupom(self):
@@ -793,6 +1148,31 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
         if df is not None:
             self._df_recibo = df
             self._recarregar_vendas()
+
+    def carregar_razao(self):
+        ft_xls = [("Excel legado", "*.xls *.xlsx *.xlsm"), ("Todos", "*.*")]
+        path = filedialog.askopenfilename(
+            title="Selecionar Razão Contábil (XLS)",
+            filetypes=ft_xls)
+        if not path:
+            return
+        try:
+            self.status_var.set("⏳ Carregando Razão Contábil...")
+            self.update()
+            df = ler_razao(path)
+            self.paths["razao"] = path
+            n = len(df)
+            self.lbl_paths["razao"].config(
+                text=f"✅ {os.path.basename(path)} ({n} lançamentos 2074)")
+            self.status_var.set(
+                f"✅ Razão carregada — {n} lançamentos PIX Maquineta (2074) | "
+                f"Total: R$ {df['valor'].sum():,.2f}")
+            self._df_razao = df
+            self._recarregar_vendas()
+        except Exception as e:
+            import traceback
+            messagebox.showerror("Erro",
+                f"Erro ao carregar Razão:\n{e}\n\n{traceback.format_exc()}")
 
     def carregar_banco(self):
         # Extrato maquineta é XLSX (não PDF)
@@ -815,9 +1195,21 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
             messagebox.showwarning("Aviso",
                 "Carregue os relatórios de vendas e o extrato do banco primeiro.")
             return
-        self.status_var.set("⏳ Conciliando automaticamente...")
+
+        # Passo 1: conciliação por valor exato (recibos, cupons, NFs)
+        self.status_var.set("⏳ Conciliando automaticamente (1/2 — valor exato)...")
         self.update()
         self.df_vendas, self.df_banco = conciliar_automatico(self.df_vendas, self.df_banco)
+
+        # Passo 2: conciliação por lote do dia (Razão) — se houver
+        tem_razao = "origem" in self.df_vendas.columns and \
+                    (self.df_vendas["origem"] == "Razão").any()
+        if tem_razao:
+            self.status_var.set("⏳ Conciliando automaticamente (2/2 — lotes Razão por dia)...")
+            self.update()
+            self.df_vendas, self.df_banco = conciliar_razao_por_dia(
+                self.df_vendas, self.df_banco)
+
         self.limpar_selecao()
         self.atualizar_tabelas()
         self.atualizar_resumo()
@@ -827,6 +1219,53 @@ class ConciliacaoPixMaquinetaApp(tk.Toplevel):
         n_pb = (self.df_banco["status"]  == "pendente").sum()
         self.status_var.set(
             f"🔄 Auto concluída — Vendas: ✅{n_cv} ❌{n_pv} | Banco: ✅{n_cb} ❌{n_pb}")
+
+    def conciliar_razao_dia(self):
+        """
+        Concilia lançamentos do Razão (lotes por dia) agrupando as
+        transações do banco com a mesma data até somar o valor do lote.
+        """
+        if self.df_vendas is None or self.df_banco is None:
+            messagebox.showwarning("Aviso",
+                "Carregue o Razão Contábil e o extrato PIX Maquineta primeiro.")
+            return
+
+        tem_razao = (self.df_vendas["origem"] == "Razão").any()
+        if not tem_razao:
+            messagebox.showinfo("Razão não carregada",
+                "Nenhum lançamento do Razão encontrado.\n"
+                "Carregue o arquivo do Razão Contábil primeiro.")
+            return
+
+        self.status_var.set("⏳ Conciliando lotes do Razão por dia...")
+        self.update()
+
+        self.df_vendas, self.df_banco = conciliar_razao_por_dia(
+            self.df_vendas, self.df_banco)
+
+        self.limpar_selecao()
+        self.atualizar_tabelas()
+        self.atualizar_resumo()
+
+        n_razao_conc = (
+            (self.df_vendas["origem"] == "Razão") &
+            (self.df_vendas["status"] == "conciliado")
+        ).sum()
+        n_razao_parc = (
+            (self.df_vendas["origem"] == "Razão") &
+            (self.df_vendas["status"] == "parcial")
+        ).sum()
+        n_razao_pend = (
+            (self.df_vendas["origem"] == "Razão") &
+            (self.df_vendas["status"] == "pendente")
+        ).sum()
+        n_banco_conc = (self.df_banco["status"] == "conciliado").sum()
+        n_banco_pend = (self.df_banco["status"] == "pendente").sum()
+
+        self.status_var.set(
+            f"📅 Razão concluído — Lotes: ✅{n_razao_conc} ⚠{n_razao_parc} ❌{n_razao_pend} "
+            f"| Banco: ✅{n_banco_conc} ❌{n_banco_pend}"
+        )
 
     def conciliar_manual(self):
         if not self.sel_vendas or not self.sel_bancos:
