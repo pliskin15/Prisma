@@ -2975,7 +2975,7 @@ def calcular_remessas(df, resultados_vendas, resultados_receb, resultados_saidas
     remessa_pixmaq = entrada[desc.str.contains("REMESSA DE PIX MAQUINETA", na=False)].sum()
     saida_pixmaq = (
         resultados_vendas.get("PIX MAQUINETA", {}).get("Total", 0.0)
-        + resultados_receb.get("ANTECIPADOS", {}).get("PIX", 0.0)
+        + resultados_receb.get("ANTECIPADOS", {}).get("PIX MAQUINETA", 0.0)
         + resultados_receb.get("DUPLICATAS", {}).get("PIX MAQUINETA", 0.0)
     )
     resultados["PIX MAQUINETA"] = {"Remessa": float(remessa_pixmaq), "Saídas": float(saida_pixmaq), "Diferença": float(remessa_pixmaq - saida_pixmaq)}

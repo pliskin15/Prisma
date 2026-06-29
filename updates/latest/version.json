@@ -1,15 +1,15 @@
 {
-  "version": "4.0.8.1y",
-  "generated_at": "2026-06-22T13:31:56.865465Z",
+  "version": "4.0.8.2",
+  "generated_at": "2026-06-29T12:43:07.608287Z",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/files",
   "files": {
     "Prisma.exe": {
-      "size": 27975197,
-      "sha256": "f88a9cba842cbf633aaaf3225b70860ac4e597157b6378c3ca51b8625594cefc"
+      "size": 28089428,
+      "sha256": "a7bf1e583c40b76b1b9d41a092668fc578e5e7a21cf206c6eab86f5f65a2fb0f"
     },
     "_internal/base_library.zip": {
       "size": 1409329,
-      "sha256": "8122f0ac6085e5f89e6301c53521782332678bbdbcf2ee90e8dddc028d780621"
+      "sha256": "5279703fa44da9f626fc14442885515047aa43e1e9c7f0abaf7d265e7ccb248a"
     },
     "_internal/libcrypto-3.dll": {
       "size": 5238520,
@@ -180,8 +180,8 @@
       "sha256": "898d1fe05e287d66bd379f26eb49d27a260f14666c7dc8b1719dae8c489abff0"
     },
     "_internal/certifi/cacert.pem": {
-      "size": 270954,
-      "sha256": "4f3975ff30abbf35443b486064ae8bcb41dff707ffdf576c76d292fb458aa0a9"
+      "size": 234354,
+      "sha256": "bbc7e9c01d7551bb8a159b5dedd989b8ee3ce105aff522b68eb1b01bf854cab0"
     },
     "_internal/certifi/py.typed": {
       "size": 0,
@@ -314,6 +314,70 @@
     "_internal/kiwisolver/_cext.cp313-win_amd64.pyd": {
       "size": 160256,
       "sha256": "45b30e4bdd12a78b5e7e5e317ba5990d98338c0953208a19c2b6b4a63f294e5d"
+    },
+    "_internal/lxml/builder.cp313-win_amd64.pyd": {
+      "size": 84992,
+      "sha256": "7f29cab4022b9ee87cd049e669a892e41a0e069f1ae7324e5d20df6a4d2c9e05"
+    },
+    "_internal/lxml/etree.cp313-win_amd64.pyd": {
+      "size": 4031488,
+      "sha256": "39a86c59fd6b509975c4a85fb57eb68c86d4d7fa2a5d2152c152158121f01b62"
+    },
+    "_internal/lxml/objectify.cp313-win_amd64.pyd": {
+      "size": 1743872,
+      "sha256": "1f48183b79a5d0fe83bfc7c030a52bc44d511274578d5f83ed2e7f9c4cf53d5c"
+    },
+    "_internal/lxml/sax.cp313-win_amd64.pyd": {
+      "size": 116224,
+      "sha256": "410a68d3c11e7a950870aea649d2033e01799e03d24aa4355c28bdd8271bf636"
+    },
+    "_internal/lxml/_elementpath.cp313-win_amd64.pyd": {
+      "size": 144384,
+      "sha256": "6fe3eba4285106fd31f8988d1530135356f682645da87f8e7ac1052a5e96142e"
+    },
+    "_internal/lxml/html/diff.cp313-win_amd64.pyd": {
+      "size": 228352,
+      "sha256": "68fef4a57848ce9dcd8e42698dcff63e7c6a37029c0d0f6586eb5a025103d11e"
+    },
+    "_internal/lxml/html/_difflib.cp313-win_amd64.pyd": {
+      "size": 361472,
+      "sha256": "3452cfe58b26f72067fb5be4aadb07adcc1fe065b9c063695be4becb2074efa6"
+    },
+    "_internal/lxml/isoschematron/resources/rng/iso-schematron.rng": {
+      "size": 19046,
+      "sha256": "702338aa97ee4d8015b6e923c65a1b3cc949f2767e6aeec380e352da0e2b60ee"
+    },
+    "_internal/lxml/isoschematron/resources/xsl/RNG2Schtrn.xsl": {
+      "size": 3247,
+      "sha256": "832f84eb1476a77e522bdc1715386b68f24423d35da084cd1dde319aacbba316"
+    },
+    "_internal/lxml/isoschematron/resources/xsl/XSD2Schtrn.xsl": {
+      "size": 4563,
+      "sha256": "430791ac820cfb315c820f7c19703609a59f21b8151345ca11e6127efbfaec0d"
+    },
+    "_internal/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_abstract_expand.xsl": {
+      "size": 12015,
+      "sha256": "492519900916845606fd8347bd6f5453a5fcb6630e1f5bdda519b3aaed25e103"
+    },
+    "_internal/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_dsdl_include.xsl": {
+      "size": 41116,
+      "sha256": "659f9def6af14250027ebb381266836316916f177480f6be0cf2d195557a4118"
+    },
+    "_internal/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_message.xsl": {
+      "size": 2069,
+      "sha256": "3506a5e33dc4b99ff9415a0c15b26a99ad922a0e3e8739bf0dbdbcdfed25d245"
+    },
+    "_internal/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_skeleton_for_xslt1.xsl": {
+      "size": 73560,
+      "sha256": "568d45e7bea875191d2c19ae1045ab2dae4b17748c4d7f41e841069f151bbfff"
+    },
+    "_internal/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_svrl_for_xslt1.xsl": {
+      "size": 20970,
+      "sha256": "508ef11f1d2578d5d2f41694e9cc90e021de7e5b9f2a6004fb38ceae286e1fe1"
+    },
+    "_internal/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/readme.txt": {
+      "size": 3310,
+      "sha256": "3862e216cc2e2c9116e443d828e7a86aeb8224512d55aea3cb3044d4e70923df"
     },
     "_internal/markupsafe/_speedups.cp313-win_amd64.pyd": {
       "size": 13312,
