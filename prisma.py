@@ -2671,7 +2671,8 @@ def calcular_recebimentos_detalhados(df):
     resultados["ANTECIPADOS"]["DINHEIRO"]      = float(antecipados[antecipados["DESCRIÇÃO"].str.contains("DINHEIRO", na=False)]["SAÍDA"].sum())
     resultados["ANTECIPADOS"]["DEPOSITO"]      = float(antecipados[antecipados["DESCRIÇÃO"].str.contains("DEPOSITO", na=False)]["SAÍDA"].sum())
     resultados["ANTECIPADOS"]["CARTAO"]        = float(antecipados[antecipados["DESCRIÇÃO"].str.contains("CARTAO|DEVCAR", na=False)]["SAÍDA"].sum())
-    resultados["ANTECIPADOS"]["PIX"]           = float(antecipados[antecipados["DESCRIÇÃO"].str.contains(r"\bPIX\b", regex=True, na=False) & ~antecipados["DESCRIÇÃO"].str.contains("MAQUINETA", na=False)]["SAÍDA"].sum())
+    resultados["ANTECIPADOS"]["PIX QRCODE"]    = float(antecipados[antecipados["DESCRIÇÃO"].str.contains("PIX QRCODE", na=False)]["SAÍDA"].sum())
+    resultados["ANTECIPADOS"]["PIX"]           = float(antecipados[antecipados["DESCRIÇÃO"].str.contains(r"\bPIX\b", regex=True, na=False) & ~antecipados["DESCRIÇÃO"].str.contains("MAQUINETA", na=False) & ~antecipados["DESCRIÇÃO"].str.contains("QRCODE", na=False)]["SAÍDA"].sum())
     resultados["ANTECIPADOS"]["PIX MAQUINETA"] = float(antecipados[antecipados["DESCRIÇÃO"].str.contains("PIX MAQUINETA", na=False)]["SAÍDA"].sum())
 
     duplicatas = df[df["DESCRIÇÃO"].str.contains("RECEB. DUP", na=False)]
@@ -2969,7 +2970,11 @@ def calcular_remessas(df, resultados_vendas, resultados_receb, resultados_saidas
 
     resultados = {}
     remessa_pix = entrada[desc.str.contains(r"REMESSA DE PIX", na=False) & ~desc.str.contains("MAQUINETA", na=False)].sum()
-    saida_pix = resultados_vendas.get("PIX", {}).get("Total", 0.0) + resultados_receb.get("DUPLICATAS", {}).get("PIX", 0.0)
+    saida_pix = (
+        resultados_vendas.get("PIX", {}).get("Total", 0.0)
+        + resultados_receb.get("DUPLICATAS", {}).get("PIX", 0.0)
+        + resultados_receb.get("ANTECIPADOS", {}).get("PIX QRCODE", 0.0)
+    )
     resultados["PIX"] = {"Remessa": float(remessa_pix), "Saídas": float(saida_pix), "Diferença": float(remessa_pix - saida_pix)}
 
     remessa_pixmaq = entrada[desc.str.contains("REMESSA DE PIX MAQUINETA", na=False)].sum()

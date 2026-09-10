@@ -84,7 +84,7 @@ def ler_cupom_fiscal(path):
             continue
         up = linha_strip.upper()
 
-        m = re.match(r"^(\d{5,})\s+\d{5,}\s+\d+\s+\w+\s+(\S+)\s+(\S+)", linha_strip)
+        m = re.match(r"^(\d{3,})\s+\d{3,}\s+\d+\s+\w+\s+(\S+)\s+(\S+)", linha_strip)
         if m:
             cupom_atual  = m.group(1)
             cond_atual   = m.group(2)
@@ -1044,4 +1044,3 @@ class ConciliacaoPixApp(tk.Toplevel):
         if tree == self.tree_v:
             return self._rmap_v.get(idx)
         return self._rmap_b.get(idx)
-

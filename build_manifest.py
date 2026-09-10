@@ -1,29 +1,21 @@
-# build_manifest.py (refatorado)
-import hashlib, json, os, sys
+# build_manifest.py
+import hashlib, json, os, sys, shutil
 from pathlib import Path
 from datetime import datetime
 
 # === CONFIGURÁVEIS ===
-BUILD_DIR = Path("dist/Prisma")           # saída do PyInstaller (onedir)
-EXTRA_DIR = Path("extra_files")           # arquivos adicionais: .env, version.txt, updater_config.json etc.
-NEW_VERSION = "4.0.8.3" \
-""                     # versão a publicar
+BUILD_DIR   = Path("dist/Prisma")        # saída do PyInstaller (onedir)
+EXTRA_DIR   = Path("extra_files")        # .env, updater_config.json, etc.
+NEW_VERSION = "4.0.8.6"                  # versão a publicar
 GITHUB_USER = "pliskin15"
 GITHUB_REPO = "Prisma"
-GIT_BRANCH  = "updates"                   # branch onde você publica os arquivos de release
+GIT_BRANCH  = "updates"
 
-# O base_url deve apontar para a pasta ONDE OS ARQUIVOS FINAIS ficam (não o manifesto)
-# Ex.: https://raw.githubusercontent.com/<user>/<repo>/<branch>/updates/files
-BASE_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/{GIT_BRANCH}/updates/files"
+BASE_URL         = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/{GIT_BRANCH}/updates/files"
+OUTPUT_MANIFEST  = Path("updates/latest/version.json")
+OUTPUT_FILES_DIR = Path("updates/files")  # onde os arquivos serão copiados para o git
 
-# Saída do manifesto (version.json) que o launcher vai ler:
-OUTPUT_MANIFEST = Path("updates/latest/version.json")
-
-# Quais arquivos pular (apenas pelo nome base)
-EXCLUDE_NAMES = {
-    "version.json",  # nunca incluir o próprio manifesto
-    # acrescente algo se necessário
-}
+EXCLUDE_NAMES = {"version.json", "launcher.exe", "updater_config.json", "version.txt"}
 
 # === FUNÇÕES ===
 def sha256_file(p: Path, chunk=1024*1024) -> str:
@@ -37,12 +29,9 @@ def sha256_file(p: Path, chunk=1024*1024) -> str:
     return h.hexdigest()
 
 def collect_files(base_dir: Path) -> dict:
-    """
-    Varre base_dir e retorna dict {rel_path_posix: {"size": int, "sha256": str}}
-    com caminhos relativos à própria base_dir.
-    """
     files = {}
     if not base_dir.exists():
+        print(f"  [aviso] pasta não encontrada: {base_dir}")
         return files
     for root, _, filenames in os.walk(base_dir):
         for name in filenames:
@@ -56,22 +45,48 @@ def collect_files(base_dir: Path) -> dict:
             }
     return files
 
+def copy_files_to_output(base_dir: Path, out_dir: Path):
+    """Copia todos os arquivos de base_dir para out_dir mantendo a estrutura."""
+    if not base_dir.exists():
+        return
+    for root, _, filenames in os.walk(base_dir):
+        for name in filenames:
+            if name in EXCLUDE_NAMES:
+                continue
+            src = Path(root) / name
+            rel = src.relative_to(base_dir)
+            dst = out_dir / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            print(f"  copiado: {rel}")
+
 def main():
-    # Garantir que BUILD_DIR exista (o EXTRA_DIR é opcional)
     if not BUILD_DIR.exists():
-        print(f"ERRO: BUILD_DIR não existe: {BUILD_DIR}")
+        print(f"ERRO: BUILD_DIR não existe: {BUILD_DIR.resolve()}")
+        print("Rode o PyInstaller antes.")
         sys.exit(1)
 
-    # Coleta dos arquivos do build e dos extras
-    build_files = collect_files(BUILD_DIR)     # ex.: SeuApp.exe, conciliador.py, etc.
-    extra_files = collect_files(EXTRA_DIR)     # ex.: .env, version.txt, updater_config.json
+    print(f"\n{'='*50}")
+    print(f"Build: {BUILD_DIR.resolve()}")
+    print(f"Versão: {NEW_VERSION}")
+    print(f"{'='*50}\n")
 
-    # Mescla: se houver colisão de nomes relaivos, "extra_files" sobrescreve (intencional)
-    files = {}
-    files.update(build_files)
-    files.update(extra_files)
+    # 1. Limpa e recria a pasta updates/files
+    if OUTPUT_FILES_DIR.exists():
+        shutil.rmtree(OUTPUT_FILES_DIR)
+    OUTPUT_FILES_DIR.mkdir(parents=True)
 
-    # Monta manifesto
+    # 2. Copia arquivos do build e extras para updates/files/
+    print("Copiando arquivos do build...")
+    copy_files_to_output(BUILD_DIR, OUTPUT_FILES_DIR)
+    print("Copiando arquivos extras...")
+    copy_files_to_output(EXTRA_DIR, OUTPUT_FILES_DIR)
+
+    # 3. Coleta hashes de dentro de updates/files/ (fonte da verdade)
+    print("\nCalculando hashes...")
+    files = collect_files(OUTPUT_FILES_DIR)
+
+    # 4. Gera manifesto
     manifest = {
         "version": NEW_VERSION,
         "generated_at": datetime.utcnow().isoformat() + "Z",
@@ -79,15 +94,18 @@ def main():
         "files": files
     }
 
-    # Garante a pasta do manifesto e grava
     OUTPUT_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_MANIFEST.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    OUTPUT_MANIFEST.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
 
-    print(f"Manifesto gerado em: {OUTPUT_MANIFEST.resolve()}")
-    print(f"Arquivos previstos: {len(files)}")
-    # Dica de publicação:
-    print("\nPublique os ARQUIVOS (build + extras) em: updates/files/")
-    print("E publique este manifest em: updates/latest/version.json")
+    print(f"\nManifesto gerado: {OUTPUT_MANIFEST.resolve()}")
+    print(f"Total de arquivos: {len(files)}")
+    print("\nPróximos passos:")
+    print("  git add updates/")
+    print("  git commit -m \"release v{NEW_VERSION}\"")
+    print(f"  git push origin master:updates --force")
 
 if __name__ == "__main__":
     main()
