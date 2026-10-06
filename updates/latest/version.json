@@ -1,6 +1,6 @@
 {
-  "version": "5.0.0",
-  "released_at": "2026-10-06 16:18:27",
+  "version": "5.0.1",
+  "released_at": "2026-10-06 16:55:40",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/latest",
   "files": {
     "_internal\\_asyncio.pyd": {
@@ -88,7 +88,7 @@
       "size": 1484144
     },
     "_internal\\base_library.zip": {
-      "sha256": "0cdb9ce6ce5659d6e6271539b2b5c099e8b852cc518e45ccb365ae0f2d2022ab",
+      "sha256": "baa31e8955617a22bdb3725d1f229c4f75b92c3f60bd46cad3af566961dd548e",
       "size": 1394319
     },
     "_internal\\certifi\\cacert.pem": {
@@ -5208,8 +5208,8 @@
       "size": 84992
     },
     "Prisma.exe": {
-      "sha256": "9e2cdde71b33dcd83294142dffd282d857f5d067fc8cdf261983d2eca5279ede",
-      "size": 22394619
+      "sha256": "4a29c7c619b33ffe18408db26e14ba4e0451ecdee2b4d92bc6ef742d0a55a540",
+      "size": 22396071
     }
   }
 }
