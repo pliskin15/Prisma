@@ -1,6 +1,6 @@
 {
-  "version": "5.0.3.2",
-  "released_at": "2026-10-07 16:18:13",
+  "version": "5.0.3.3",
+  "released_at": "2026-10-08 16:31:29",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/latest",
   "files": {
     "_internal\\_asyncio.pyd": {
@@ -88,7 +88,7 @@
       "size": 1484144
     },
     "_internal\\base_library.zip": {
-      "sha256": "37c309a0618faa1e677d5728da9e4c205ee8a712a3336d8409e4fde8bfe2a625",
+      "sha256": "2aedd55074cf7cbfaff21c236f2b33bef0da419eb92f332f5e52651e48e8f631",
       "size": 1394319
     },
     "_internal\\certifi\\cacert.pem": {
@@ -194,6 +194,70 @@
     "_internal\\libssl-3.dll": {
       "sha256": "b17a87979862d19241edc4318f967e24c3ec356ed6c2368f561179fab2311001",
       "size": 1329912
+    },
+    "_internal\\lxml\\_elementpath.cp314-win_amd64.pyd": {
+      "sha256": "222be8036ba2f3bea485a4f68b8f8f484ccd7197d96fd60518ab778854c3151a",
+      "size": 149504
+    },
+    "_internal\\lxml\\builder.cp314-win_amd64.pyd": {
+      "sha256": "5af41a278c7a9294bf34ddac3840b3ed40ed4f7e201d9a8c8e8c4a5e504ee1a4",
+      "size": 88576
+    },
+    "_internal\\lxml\\etree.cp314-win_amd64.pyd": {
+      "sha256": "191eee78b34979c31ba08d952ca3cafabafe2f86d81adef19f0bcd4ad2ea53c9",
+      "size": 4087296
+    },
+    "_internal\\lxml\\html\\_difflib.cp314-win_amd64.pyd": {
+      "sha256": "5f5a5731a9ae72b156153dac0421ccb8244df0a28727ebe3b3b6bdd83467ce5c",
+      "size": 376832
+    },
+    "_internal\\lxml\\html\\diff.cp314-win_amd64.pyd": {
+      "sha256": "33d8838f47cb45b6d32b671851c724c71311d171a6ed4cd05de9b97a43b504d3",
+      "size": 239104
+    },
+    "_internal\\lxml\\isoschematron\\resources\\rng\\iso-schematron.rng": {
+      "sha256": "702338aa97ee4d8015b6e923c65a1b3cc949f2767e6aeec380e352da0e2b60ee",
+      "size": 19046
+    },
+    "_internal\\lxml\\isoschematron\\resources\\xsl\\iso-schematron-xslt1\\iso_abstract_expand.xsl": {
+      "sha256": "492519900916845606fd8347bd6f5453a5fcb6630e1f5bdda519b3aaed25e103",
+      "size": 12015
+    },
+    "_internal\\lxml\\isoschematron\\resources\\xsl\\iso-schematron-xslt1\\iso_dsdl_include.xsl": {
+      "sha256": "659f9def6af14250027ebb381266836316916f177480f6be0cf2d195557a4118",
+      "size": 41116
+    },
+    "_internal\\lxml\\isoschematron\\resources\\xsl\\iso-schematron-xslt1\\iso_schematron_message.xsl": {
+      "sha256": "3506a5e33dc4b99ff9415a0c15b26a99ad922a0e3e8739bf0dbdbcdfed25d245",
+      "size": 2069
+    },
+    "_internal\\lxml\\isoschematron\\resources\\xsl\\iso-schematron-xslt1\\iso_schematron_skeleton_for_xslt1.xsl": {
+      "sha256": "568d45e7bea875191d2c19ae1045ab2dae4b17748c4d7f41e841069f151bbfff",
+      "size": 73560
+    },
+    "_internal\\lxml\\isoschematron\\resources\\xsl\\iso-schematron-xslt1\\iso_svrl_for_xslt1.xsl": {
+      "sha256": "508ef11f1d2578d5d2f41694e9cc90e021de7e5b9f2a6004fb38ceae286e1fe1",
+      "size": 20970
+    },
+    "_internal\\lxml\\isoschematron\\resources\\xsl\\iso-schematron-xslt1\\readme.txt": {
+      "sha256": "3862e216cc2e2c9116e443d828e7a86aeb8224512d55aea3cb3044d4e70923df",
+      "size": 3310
+    },
+    "_internal\\lxml\\isoschematron\\resources\\xsl\\RNG2Schtrn.xsl": {
+      "sha256": "832f84eb1476a77e522bdc1715386b68f24423d35da084cd1dde319aacbba316",
+      "size": 3247
+    },
+    "_internal\\lxml\\isoschematron\\resources\\xsl\\XSD2Schtrn.xsl": {
+      "sha256": "430791ac820cfb315c820f7c19703609a59f21b8151345ca11e6127efbfaec0d",
+      "size": 4563
+    },
+    "_internal\\lxml\\objectify.cp314-win_amd64.pyd": {
+      "sha256": "6e7e0479add68e3c3764efcf72bd0d0660b13868c07755f72515246340687961",
+      "size": 1754624
+    },
+    "_internal\\lxml\\sax.cp314-win_amd64.pyd": {
+      "sha256": "9c48b8acb2c073ff3b79dfdbd80b0f1b60da99579f15fd61b57f8ebc09d74280",
+      "size": 121344
     },
     "_internal\\markupsafe\\_speedups.cp314-win_amd64.pyd": {
       "sha256": "6333da2f431abb0d75a6488ff457efb7bc9e33b6afc1ce5ad48475fce2ef5838",
@@ -5208,8 +5272,8 @@
       "size": 84992
     },
     "Prisma.exe": {
-      "sha256": "979a20bcababdbeb643fcc94e925e5e47237e2960e8994028e20b5003ce86dc9",
-      "size": 22422066
+      "sha256": "9ed97a773b953e507d0600f3ba39fc9b53bca5295b3519fe8b920814c8896f7f",
+      "size": 22542066
     }
   }
 }
