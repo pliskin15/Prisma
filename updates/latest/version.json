@@ -1,6 +1,6 @@
 {
-  "version": "5.0.5",
-  "released_at": "2026-10-13 16:19:10",
+  "version": "6.0.0",
+  "released_at": "2026-10-15 08:58:35",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/latest",
   "files": {
     "_internal\\_asyncio.pyd": {
@@ -88,7 +88,7 @@
       "size": 1484144
     },
     "_internal\\base_library.zip": {
-      "sha256": "d41a838c5b42f23856b6dbdd74021197c8b4e387b7bcc4580c89217ca3b9e318",
+      "sha256": "273452b14d8591da818045e1e8b61b65e7f473391162ecec888eb30de9c7a92c",
       "size": 1394319
     },
     "_internal\\certifi\\cacert.pem": {
@@ -2154,6 +2154,30 @@
     "_internal\\PIL\\_webp.cp314-win_amd64.pyd": {
       "sha256": "f4d851381d1bd937753ba78e951c96a85f3a6c5ac402beec23fc13fdb6d45198",
       "size": 416256
+    },
+    "_internal\\pluggy-1.7.0.dist-info\\INSTALLER": {
+      "sha256": "ceebae7b8927a3227e5303cf5e0f1f7b34bb542ad7250ac03fbcde36ec2f1508",
+      "size": 4
+    },
+    "_internal\\pluggy-1.7.0.dist-info\\licenses\\LICENSE": {
+      "sha256": "d6b65e6c213a5d0b577911d34d6e5949b9f59d76c238c5071a2f3fc16cfb2606",
+      "size": 1110
+    },
+    "_internal\\pluggy-1.7.0.dist-info\\METADATA": {
+      "sha256": "20ac8237e37f1d6e7e75500cd663015177ba80c1a1a595ff6bae18a539ff8a2c",
+      "size": 4966
+    },
+    "_internal\\pluggy-1.7.0.dist-info\\RECORD": {
+      "sha256": "e2fe27719bb53484b241e2fec0ee3f24183484c61e1483e6953e74c08e0bf539",
+      "size": 2144
+    },
+    "_internal\\pluggy-1.7.0.dist-info\\top_level.txt": {
+      "sha256": "c4a4824616a2faff4c724bccb96a8dcf5e9cd6d6ec98e820a0c4b04e07296071",
+      "size": 7
+    },
+    "_internal\\pluggy-1.7.0.dist-info\\WHEEL": {
+      "sha256": "61532836a2b3111b7ec23519c09df7c41180c27165fb872a6d8913b566b88ad1",
+      "size": 91
     },
     "_internal\\propcache\\_helpers_c.cp314-win_amd64.pyd": {
       "sha256": "041d0de31e32d1a248b93ba8b4b232a8562cea142b59f2da0fc8cbb5de7698e3",
@@ -5272,8 +5296,8 @@
       "size": 84992
     },
     "Prisma.exe": {
-      "sha256": "d5d895897aa7b89e555aa61ca3541d42f91d84760f0714fe7ec06106ba14f69c",
-      "size": 22557514
+      "sha256": "325a10213490e521281de8d06f851e612070f54d69ccb72a5bdb8cfef7c5b289",
+      "size": 25538615
     }
   }
 }
