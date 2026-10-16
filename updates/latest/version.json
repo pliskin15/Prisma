@@ -1,6 +1,6 @@
 {
-  "version": "6.0.2",
-  "released_at": "2026-10-15 10:51:33",
+  "version": "6.0.3",
+  "released_at": "2026-10-16 08:30:38",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/latest",
   "files": {
     "_internal\\_asyncio.pyd": {
@@ -76,19 +76,19 @@
       "size": 503520
     },
     "_internal\\assets\\icone.ico": {
-      "sha256": "98bb92f7eb05d4837df95445a52e70b2cee3fecaa1917b00db939ca71ae14dd4",
-      "size": 4286
+      "sha256": "ab3eeea578896bd4952b6ceaf365dcf0de3202741afa49dc259b280148cee5ab",
+      "size": 43994
     },
     "_internal\\assets\\icone.png": {
-      "sha256": "9ec5d0940afebf15e49bf7134f640432bba723afa6853209d962cacd499613ec",
-      "size": 2693
+      "sha256": "8746d4c570485cc5dc67a270ecff6979d8eca0d3433c2a959829187ae3c79ff0",
+      "size": 25164
     },
     "_internal\\assets\\logo.png": {
       "sha256": "1d332841edbea63631e3a4ee6e9f69de55e8e61efd5a837c30218794b85ff0da",
       "size": 1484144
     },
     "_internal\\base_library.zip": {
-      "sha256": "77c8e465b558c793f88817332a192c681f8afa1a150e059819a656e9d45a74b9",
+      "sha256": "6628f928b3f497737168c61efc60a9a7266e2148b799c091eb2af0c4992bd2a4",
       "size": 1394319
     },
     "_internal\\certifi\\cacert.pem": {
@@ -5296,8 +5296,8 @@
       "size": 84992
     },
     "Prisma.exe": {
-      "sha256": "a5526a300c2becd1ef582a0d240453616761f8a336dd9733b33cf951713f8302",
-      "size": 25572147
+      "sha256": "a349976f4d6b5b36d2746a9e4932b5076c744c638cf73d2dd4a336850db6e913",
+      "size": 25613971
     }
   }
 }
