@@ -1,6 +1,6 @@
 {
-  "version": "6.1.1",
-  "released_at": "2026-10-28 16:54:36",
+  "version": "6.1.2",
+  "released_at": "2026-11-03 07:37:10",
   "base_url": "https://raw.githubusercontent.com/pliskin15/Prisma/updates/updates/latest",
   "files": {
     "_internal\\_asyncio.pyd": {
@@ -88,7 +88,7 @@
       "size": 1484144
     },
     "_internal\\base_library.zip": {
-      "sha256": "32f1cd926ba971d1db70cd3b7f1523bffad6f0d2b9e8d90957c7bf24e4f762e4",
+      "sha256": "e42f525234507ac90eeb3f4eac9d5bd84eb6fa73855c8b35e61bef0959a70f1d",
       "size": 1394319
     },
     "_internal\\certifi\\cacert.pem": {
@@ -2751,6 +2751,10 @@
       "sha256": "2d0fa075eb5b90c5a1cb24863a65c0b3ad6127ff250a97ad40d49a238a346eb9",
       "size": 1643520
     },
+    "_internal\\pywin32_system32\\pywintypes314.dll": {
+      "sha256": "e62808f40462f8066c8d19811cebd15467de6992b1cb48be5f5903910f5395f7",
+      "size": 136704
+    },
     "_internal\\select.pyd": {
       "sha256": "722328e7fad8048057fc966474ba73966d2ceebaa32e7344cce09640ab4dc9bd",
       "size": 33504
@@ -5291,13 +5295,25 @@
       "sha256": "1b68144734c4b66791f27add5d425f3620775585718a03d0f9b110ba3a4d88db",
       "size": 82
     },
+    "_internal\\win32\\win32api.pyd": {
+      "sha256": "9004920e2c7863c34d0b3c4183ab3e1482475817cfb64f4f198e1fdd43f48f4e",
+      "size": 139264
+    },
+    "_internal\\win32\\win32evtlog.pyd": {
+      "sha256": "0899fd11f626958ab4969bf4080156d45eb6257894e6f3217eccee354a0adecf",
+      "size": 75776
+    },
+    "_internal\\win32\\win32pdh.pyd": {
+      "sha256": "cfd8e33ef60f73b77d3b5751dbd1755e337037eb6544dba5e234ec3cba503473",
+      "size": 33792
+    },
     "_internal\\yarl\\_quoting_c.cp314-win_amd64.pyd": {
       "sha256": "0c774c400a79d179f4c1e9d718563364fdf6259c5140ed16abda1dbe40228f63",
       "size": 84992
     },
     "Prisma.exe": {
-      "sha256": "d8126ba176b9b6431780b0f1787e6675f702d722f5aa1614dcf3186509f01c71",
-      "size": 25678669
+      "sha256": "9bbcdd69b546c9a8c8f67f12b033489b197481135d881c97a156ed160c5338a3",
+      "size": 25863771
     }
   }
 }
